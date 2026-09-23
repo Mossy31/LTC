@@ -18,11 +18,12 @@ import math
 import PIL
 
 SogliaRimozionePunti = 10
-Raggio = 3.5
+Raggio = 5
 ListaPunti = []
 ImmagineTappeto = "Mappa.png"
 IndirizzoImmagineCursore = "Cursore.png"
 PuntoFisso = (347, 1883, 0)
+ListaPunti.append(PuntoFisso)
 
 MmPerStud = 8
 MmPerPixelArt = MmPerStud / 2
@@ -67,7 +68,7 @@ def ClickS(event):
 def ClickC(event):
     X = event.x
     Y = event.y
-    ListaPunti.append((X, Y, 1, 0, 0, 0))
+    ListaPunti.append((X, Y, 1, 0, 0))
 
     Aggiorna()
 
@@ -101,72 +102,23 @@ def Aggiorna():
         PuntoPrecedente = Punto
 
 def Esporta():
-    with open("Output.txt", "w") as File:
-        if len(ListaPunti) > 1:
-            for ContatorePunto in range(len(ListaPunti)):
-                try:
-                    Punto1 = ListaPunti[ContatorePunto]
-                    Punto2 = ListaPunti[ContatorePunto + 1]
-                    Punto3 = ListaPunti[ContatorePunto + 2]
-                    if Punto2[2] > 0 and ContatorePunto + 2 < len(ListaPunti):
-                        File.write(f"A {Distanza(Punto1[0], Punto1[1], Punto2[0], Punto2[1])}\n")
-                        
-                        if len(Punto2) > 5:
-                            File.write(f"M {Punto2[3]} {Punto2[4]}\n")
-                            File.write(f"M {Punto2[3]} {Punto2[5]}\n")
-                        else:
-                            File.write(f"M {Punto2[3]} {Punto2[4]}\n")
 
-                        File.write(f"G {CalcoloAngolo(Punto1[0], Punto1[1], Punto2[0], Punto2[1], Punto3[0], Punto3[1])}\n")
-                    else:
-                        File.write(f"A {Distanza(Punto1[0], Punto1[1], Punto2[0], Punto2[1])}\n")
-                        File.write(f"G {CalcoloAngolo(Punto1[0], Punto1[1], Punto2[0], Punto2[1], Punto3[0], Punto3[1])}\n")
-                except IndexError:
-                    try:
-                        Punto1 = ListaPunti[ContatorePunto]
-                        Punto2 = ListaPunti[ContatorePunto + 1]
-                        if Punto1[2] > 0:
-                            File.write(f"M {Punto2[3]} {Punto2[4]}\n")
-                        File.write(f"A {Distanza(Punto1[0], Punto1[1], Punto2[0], Punto2[1])}\n")
-                    except IndexError:
-                        try:                            
-                            Punto1 = ListaPunti[ContatorePunto]
-                            if Punto1[2] > 0:
-                                File.write(f"M {Punto2[3]} {Punto2[4]}\n")                            
-                        except:
-                            File.close()
+    with open("Output.py", "w") as Output:
+        with open("Default.py", "r") as Default:
+            Output.write(Default.read() + "\n")
+
+    with open("Output.py", "a") as File:
+        Precedente = ()
+        for Punto1, Punto2 in zip(ListaPunti, ListaPunti[1:]):
+            dx = (Punto2[0] - Punto1[0]) / PPM
+            dy = -(Punto2[1] - Punto1[1]) / PPM
+            File.write(f"await move_by({round(dx)}, {round(dy)}, then=Stop.HOLD)\n")
+            if Punto2[2] == 1 and Punto2[2] != Precedente:
+                File.write(f"Motore(0, 0)\n")
+            Precedente = Punto2[2]
     
-    with open("Output.txt", "r") as File:
+    with open("Output.py", "r") as File:
         print(File.read())
-
-def Ridisegna():
-    ListaPunti.clear()
-    Aggiorna()
-    with open("Output.txt", "r") as File:
-        for Number, Line in enumerate(File.readlines()):
-            print(f"{Number}) {Line.strip()}")
-            if Line.strip()[0] == "A":
-                ListaPunti.append(PuntoFisso + (0, Line.strip().removeprefix("A").strip()), 0)
-
-
-
-def Distanza(X1, Y1, X2, Y2):
-    Distanza = math.sqrt(pow(int(X1)-int(X2), 2) + pow(int(Y1)-int(Y2), 2))
-    return Distanza/PPM
-
-def CalcoloAngolo(X1, Y1, X2, Y2, X3, Y3):
-    
-    #DaCapire#
-
-    V1 = (X2 - X1, Y2 - Y1)
-    V2 = (X3 - X2, Y3 - Y2)
-    Det = V1[0]*V2[1] - V1[1]*V2[0]
-    Dot = V1[0]*V2[0] + V1[1]*V2[1]
-    AngoloRadianti = math.atan2(Det, Dot)
-    AngoloGradi = math.degrees(AngoloRadianti)
-    return round(AngoloGradi)
-
-    #DaCapire#
 
 def Salva():
     with open("Punti.txt", "w") as File:
@@ -184,7 +136,6 @@ def Cancella():
 
 def MovimentoCursore(event):
     Tela.coords(CursoreScalatoTkinterMouse, event.x, event.y)
-
 Rotellina = 0
 
 def MovimentoRotellinaSu(event):
@@ -261,11 +212,5 @@ if(["Yes", "yes", "Y", "y"].__contains__(Input)):
         ImmagineCursorePositiva.save(f"Immagini/{IndirizzoImmagineCursore.removesuffix(".png")}{str(Angolo)}.png")
         ImmagineCursoreNegativa = ImmagineCursore.rotate(-Angolo)
         ImmagineCursoreNegativa.save(f"Immagini/{IndirizzoImmagineCursore.removesuffix(".png")}-{str(Angolo)}.png")
-
-Aggiorna()
-
-print("LoL")
-Ridisegna()
-Aggiorna
 
 Finestra.mainloop()

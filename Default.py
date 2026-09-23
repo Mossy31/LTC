@@ -1,0 +1,2 @@
+import pybricks
+print("Pybricks!")
