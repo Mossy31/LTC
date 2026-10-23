@@ -1,12 +1,7 @@
 #--------------------------------------#
 
 # IndietroRobot
-# Zoom
-# SpostaPunti
-# CalcolareAngoloIniziale
-# InterfacciaGraficaBoostata
-# Angoli Interativi
-# Segmenti Interativi
+# CodiceBlocchi
 
 #--------------------------------------#
 
@@ -15,6 +10,7 @@ from PIL import Image
 import screeninfo
 import tkinter
 import math
+import json
 import PIL
 
 SogliaRimozionePunti = 10
@@ -22,8 +18,19 @@ Raggio = 5
 ListaPunti = []
 ImmagineTappeto = "Mappa.png"
 IndirizzoImmagineCursore = "Cursore.png"
-PuntoFisso = (347, 1883, 0)
-ListaPunti.append(PuntoFisso)
+IndirizzoConfig = "Config.json"
+ModalitaCenter = False
+
+def CaricaConfig():
+    with open(IndirizzoConfig, "r") as File:
+        return json.load(File)["PuntoFisso"]
+
+def SalvaConfig(Punto):
+    with open(IndirizzoConfig, "w") as File:
+        json.dump({"PuntoFisso": Punto}, File, indent=4)
+
+PuntoFisso = CaricaConfig()
+ListaPunti.append(list(PuntoFisso))
 
 MmPerStud = 8
 MmPerPixelArt = MmPerStud / 2
@@ -59,16 +66,41 @@ AltezzaImmagine_px = int(AltezzaImmagine_mm * PPM)
 LarghezzaImmagine_px = int(LarghezzaImmagine_mm * PPM)
 
 def ClickS(event):
+    global PuntoFisso, ModalitaCenter
     X = event.x
     Y = event.y
-
-    ListaPunti.append((X, Y, 0))
+    Aggiungi = True    
+    
+    if ModalitaCenter:
+        PuntoFisso = [X, Y, 0]
+        SalvaConfig(PuntoFisso)
+        if len(ListaPunti) > 0:
+            ListaPunti[0] = list(PuntoFisso)
+        else:
+            ListaPunti.append(list(PuntoFisso))
+        ModalitaCenter = not ModalitaCenter
+    
+    else:
+        for Punto in ListaPunti:
+            if (Punto[0] >= X-SogliaRimozionePunti and Punto[0]<= X+SogliaRimozionePunti):
+                if(Punto[1] >= Y-SogliaRimozionePunti and Punto[1]<= Y+SogliaRimozionePunti):
+                    if Punto[2] == 0:
+                        Punto[2] = 1
+                    elif Punto[2] == 1:
+                        Punto[2] = 0
+                    Aggiungi = False
+        if Aggiungi:
+            ListaPunti.append([X, Y, 0])
     Aggiorna()
+
+def Center():
+    global ModalitaCenter
+    ModalitaCenter = not ModalitaCenter
 
 def ClickC(event):
     X = event.x
     Y = event.y
-    ListaPunti.append((X, Y, 1, 0, 0))
+    ListaPunti.append([X, Y, 2])
 
     Aggiorna()
 
@@ -86,13 +118,15 @@ def ClickD(event):
 def Aggiorna():
     Tela.delete("Punti", "Linee")
     if len(ListaPunti) < 1:
-        ListaPunti.append(PuntoFisso)
+        ListaPunti.append(list(PuntoFisso))
     for Numero, Punto in enumerate(ListaPunti):
         X1 = Punto[0]
         Y1 = Punto[1]
         Type = Punto[2]
-        if Type == 1:
+        if Type == 2:
             Tela.create_oval(X1-Raggio, Y1-Raggio, X1+Raggio, Y1+Raggio, fill="blue", outline="black", tags="Punti")
+        elif Type == 1:
+            Tela.create_oval(X1-Raggio, Y1-Raggio, X1+Raggio, Y1+Raggio, fill="yellow", outline="black", tags="Punti")
         else:
             Tela.create_oval(X1-Raggio, Y1-Raggio, X1+Raggio, Y1+Raggio, fill="red", outline="black", tags="Punti")      
         if Numero > 0:
@@ -102,23 +136,25 @@ def Aggiorna():
         PuntoPrecedente = Punto
 
 def Esporta():
+    with open("Output.txt", "w") as File:
+        Precedente = ListaPunti[0]
+        for Punto in ListaPunti[1:]:
+            Gradi = Angle(Precedente, Punto)
+            Distanza = Distance(Precedente, Punto)
+            if Punto[2] == 1:
+                Gradi += 180
+                Distanza = -Distanza
+            File.write(f"G {round(Gradi)}\n")
+            File.write(f"A {round(Distanza)}\n")
+            if Punto[2] == 2:
+                File.write("M 0 0\n")
+            Precedente = Punto
 
-    with open("Output.py", "w") as Output:
-        with open("Default.py", "r") as Default:
-            Output.write(Default.read() + "\n")
+def Distance(A, B):
+    return math.sqrt((A[0] - B[0])**2 + (A[1] - B[1])**2)/PPM
 
-    with open("Output.py", "a") as File:
-        Precedente = ()
-        for Punto1, Punto2 in zip(ListaPunti, ListaPunti[1:]):
-            dx = (Punto2[0] - Punto1[0]) / PPM
-            dy = -(Punto2[1] - Punto1[1]) / PPM
-            File.write(f"await move_by({round(dx)}, {round(dy)}, then=Stop.HOLD)\n")
-            if Punto2[2] == 1 and Punto2[2] != Precedente:
-                File.write(f"Motore(0, 0)\n")
-            Precedente = Punto2[2]
-    
-    with open("Output.py", "r") as File:
-        print(File.read())
+def Angle(A, B):
+    return math.degrees(math.atan2(A[1] - B[1], A[0] - B[0]))-90
 
 def Salva():
     with open("Punti.txt", "w") as File:
@@ -169,6 +205,8 @@ Finestra.columnconfigure(0, weight=1)
 Finestra.columnconfigure(1, weight=1)
 Finestra.columnconfigure(2, weight=1)
 Finestra.columnconfigure(3, weight=1)
+Finestra.columnconfigure(4, weight=1)
+Finestra.columnconfigure(5, weight=1)
 
 Finestra.rowconfigure(0, weight=1)
 Finestra.rowconfigure(1, weight=1)
@@ -181,9 +219,13 @@ BottoneApri = tkinter.Button(Finestra, text="Apri", command=Apri, padx=20, pady=
 BottoneApri.grid(row=0, column=2, sticky="nsew")
 BottoneCancella = tkinter.Button(Finestra, text="Cancella", command=Cancella, padx=20, pady=20, anchor=tkinter.N)
 BottoneCancella.grid(row=0, column=3, sticky="nsew")
+BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=20, pady=20, anchor=tkinter.N)
+BottoneCenter.grid(row=0, column=4, sticky="nsew")
+BottoneExit = tkinter.Button(Finestra, text="Exit", command=Finestra.destroy, padx=20, pady=20, anchor=tkinter.N)
+BottoneExit.grid(row=0, column=5, sticky="nsew")
 
 Tela = tkinter.Canvas(Finestra, width=LarghezzaImmagine_px, height=AltezzaImmagine_px)
-Tela.grid(row=1, column=0, columnspan=4)
+Tela.grid(row=1, column=0, columnspan=6)
 
 Tela.bind("<Button-1>", ClickS)
 Tela.bind("<Button-2>", ClickC)
@@ -213,4 +255,5 @@ if(["Yes", "yes", "Y", "y"].__contains__(Input)):
         ImmagineCursoreNegativa = ImmagineCursore.rotate(-Angolo)
         ImmagineCursoreNegativa.save(f"Immagini/{IndirizzoImmagineCursore.removesuffix(".png")}-{str(Angolo)}.png")
 
+Aggiorna()
 Finestra.mainloop()

@@ -1,4 +1,7 @@
 Immagini/
 Punti.txt
-Output.py
+Output.txt
 *.pdf
+.directory
+Test.py
+.gitingnore

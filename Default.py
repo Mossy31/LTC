@@ -1,2 +1,0 @@
-import pybricks
-print("Pybricks!")
