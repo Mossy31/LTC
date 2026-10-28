@@ -70,6 +70,9 @@ PPM *= FattoreVisualizzazione
 AltezzaImmagine_px = int(AltezzaImmagine_mm * PPM)
 LarghezzaImmagine_px = int(LarghezzaImmagine_mm * PPM)
 
+# Scala usata dai vecchi file salvati in pixel; poi PPM segue la grandezza della finestra
+PPMVecchiFile = PPM
+
 # I punti sono sempre salvati in mm, i pixel servono solo per disegnare
 def InPixel(Valore):
     return Valore * PPM
@@ -89,7 +92,7 @@ def CaricaConfig():
         Punto = json.load(File)["PuntoFisso"]
     if isinstance(Punto, list):
         # Vecchio formato in pixel
-        return NuovoPunto(InMm(Punto[0]), InMm(Punto[1]))
+        return NuovoPunto(Punto[0] / PPMVecchiFile, Punto[1] / PPMVecchiFile)
     return NuovoPunto(Punto["X"], Punto["Y"])
 
 def SalvaConfig(Punto):
@@ -432,7 +435,7 @@ def Apri():
     with open(IndirizzoPunti, "r") as File:
         Punti = json.load(File)
     # Il vecchio formato era una lista di [X, Y, Tipo] in pixel
-    Punti = [Punto if isinstance(Punto, dict) else NuovoPunto(InMm(Punto[0]), InMm(Punto[1]), Punto[2]) for Punto in Punti]
+    Punti = [Punto if isinstance(Punto, dict) else NuovoPunto(Punto[0] / PPMVecchiFile, Punto[1] / PPMVecchiFile, Punto[2]) for Punto in Punti]
     SalvaStato()
     ListaPunti[:] = Punti
     AnnullaCurva()
@@ -486,6 +489,33 @@ def MovimentoRotellina(event):
         MovimentoRotellinaGiu(event)
 
 CacheCursore = {}
+AttesaRidimensionamento = None
+DimensioniTela = (0, 0)
+
+def Ridimensiona(event):
+    # Aspetta che l'utente finisca di ridimensionare prima di riscalare le immagini
+    global AttesaRidimensionamento
+    if AttesaRidimensionamento is not None:
+        Finestra.after_cancel(AttesaRidimensionamento)
+    AttesaRidimensionamento = Finestra.after(100, ApplicaDimensioni, event.width, event.height)
+
+def ApplicaDimensioni(Larghezza, Altezza):
+    global PPM, TappetoGaraScalatoTkinter, ImmagineCursoreScalato, DimensioniTela, AttesaRidimensionamento
+    AttesaRidimensionamento = None
+    if (Larghezza, Altezza) == DimensioniTela or Larghezza < 10 or Altezza < 10:
+        return
+    DimensioniTela = (Larghezza, Altezza)
+    PPM = min(Larghezza / LarghezzaImmagine_mm, Altezza / AltezzaImmagine_mm)
+
+    TappetoGaraScalato = TappetoGara.resize((round(LarghezzaImmagine_mm * PPM), round(AltezzaImmagine_mm * PPM)))
+    TappetoGaraScalatoTkinter = ImageTk.PhotoImage(TappetoGaraScalato)
+    Tela.itemconfig(Tappeto, image=TappetoGaraScalatoTkinter)
+
+    DimensioniRobotPixel = (max(1, round(DimensioniRobot[0]*PPM)), max(1, round(DimensioniRobot[1]*PPM)))
+    ImmagineCursoreScalato = ImmagineCursore.resize(DimensioniRobotPixel)
+    CacheCursore.clear()
+    ImpostaImmagine(Rotellina)
+    Aggiorna()
 
 def ImpostaImmagine(Gradi):
     # Ruota il cursore al volo e tiene in memoria le immagini gia' create
@@ -499,29 +529,35 @@ Finestra.title("Line-To-Code")
 for Colonna in range(7):
     Finestra.columnconfigure(Colonna, weight=1)
 
-Finestra.rowconfigure(0, weight=1)
 Finestra.rowconfigure(1, weight=1)
 
-BottoneEsporta = tkinter.Button(Finestra, text="Esporta", command=Esporta, padx=20, pady=20, anchor=tkinter.N)
+# Parte a tutto schermo, la mappa si adatta allo spazio libero
+try:
+    Finestra.attributes("-zoomed", True)
+except tkinter.TclError:
+    Finestra.state("zoomed")
+
+BottoneEsporta = tkinter.Button(Finestra, text="Esporta", command=Esporta, padx=10, pady=4)
 BottoneEsporta.grid(row=0, column=0, sticky="nsew")
-BottoneSalva = tkinter.Button(Finestra, text="Salva", command=Salva, padx=20, pady=20, anchor=tkinter.N)
+BottoneSalva = tkinter.Button(Finestra, text="Salva", command=Salva, padx=10, pady=4)
 BottoneSalva.grid(row=0, column=1, sticky="nsew")
-BottoneApri = tkinter.Button(Finestra, text="Apri", command=Apri, padx=20, pady=20, anchor=tkinter.N)
+BottoneApri = tkinter.Button(Finestra, text="Apri", command=Apri, padx=10, pady=4)
 BottoneApri.grid(row=0, column=2, sticky="nsew")
-BottoneCancella = tkinter.Button(Finestra, text="Cancella", command=Cancella, padx=20, pady=20, anchor=tkinter.N)
+BottoneCancella = tkinter.Button(Finestra, text="Cancella", command=Cancella, padx=10, pady=4)
 BottoneCancella.grid(row=0, column=3, sticky="nsew")
-BottoneAnnulla = tkinter.Button(Finestra, text="Annulla", command=Annulla, padx=20, pady=20, anchor=tkinter.N)
+BottoneAnnulla = tkinter.Button(Finestra, text="Annulla", command=Annulla, padx=10, pady=4)
 BottoneAnnulla.grid(row=0, column=4, sticky="nsew")
-BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=20, pady=20, anchor=tkinter.N)
+BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=10, pady=4)
 BottoneCenter.grid(row=0, column=5, sticky="nsew")
-BottoneExit = tkinter.Button(Finestra, text="Exit", command=Finestra.destroy, padx=20, pady=20, anchor=tkinter.N)
+BottoneExit = tkinter.Button(Finestra, text="Exit", command=Finestra.destroy, padx=10, pady=4)
 BottoneExit.grid(row=0, column=6, sticky="nsew")
 
-Tela = tkinter.Canvas(Finestra, width=LarghezzaImmagine_px, height=AltezzaImmagine_px)
-Tela.grid(row=1, column=0, columnspan=7)
+Tela = tkinter.Canvas(Finestra, width=LarghezzaImmagine_px // 2, height=AltezzaImmagine_px // 2, highlightthickness=0)
+Tela.grid(row=1, column=0, columnspan=7, sticky="nsew")
 
-Aiuto = tkinter.Label(Finestra, text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina · Rotella: ruota robot · Ctrl+Z: annulla")
-Aiuto.grid(row=2, column=0, columnspan=7, sticky="w", padx=5, pady=3)
+Aiuto = tkinter.Label(Finestra, justify=tkinter.LEFT, anchor="w", font=("TkDefaultFont", 9), text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina · Rotella: ruota robot · Ctrl+Z: annulla")
+Aiuto.grid(row=2, column=0, columnspan=7, sticky="ew", padx=5, pady=2)
+Aiuto.bind("<Configure>", lambda event: Aiuto.config(wraplength=event.width - 10))
 
 Tela.bind("<ButtonPress-1>", PremiS)
 Tela.bind("<B1-Motion>", TrascinaS)
@@ -535,17 +571,12 @@ Tela.bind("<MouseWheel>", MovimentoRotellina)
 Finestra.bind("<Control-z>", Annulla)
 Finestra.bind("<Control-Z>", Annulla)
 Finestra.bind("<Escape>", AnnullaCurva)
+Tela.bind("<Configure>", Ridimensiona)
 
 TappetoGara = Image.open(ImmagineTappeto)
-TappetoGaraScalato = TappetoGara.resize((LarghezzaImmagine_px, AltezzaImmagine_px))
-TappetoGaraScalatoTkinter = ImageTk.PhotoImage(TappetoGaraScalato)
-Tappeto = Tela.create_image(0, 0, anchor=tkinter.NW, image=TappetoGaraScalatoTkinter, tags="Tappeto")
+Tappeto = Tela.create_image(0, 0, anchor=tkinter.NW, tags="Tappeto")
 
 ImmagineCursore = Image.open(IndirizzoImmagineCursore).convert("RGBA")
-DimensioniRobotPixel = (round(DimensioniRobot[0]*PPM), round(DimensioniRobot[1]*PPM))
-ImmagineCursoreScalato = ImmagineCursore.resize(DimensioniRobotPixel)
 CursoreScalatoTkinterMouse = Tela.create_image(LarghezzaImmagine_px/2, AltezzaImmagine_px/2, anchor="center", tags="Mouse")
-ImpostaImmagine(Rotellina)
-
-Aggiorna()
+ApplicaDimensioni(LarghezzaImmagine_px, AltezzaImmagine_px)
 Finestra.mainloop()
