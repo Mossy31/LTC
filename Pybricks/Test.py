@@ -44,6 +44,8 @@ while True:
                 Coso_Tuff.straight(item[1])
             elif 'G' in item[0]:
                 Coso_Tuff.turn(item[1], absolute=True)
+            elif 'C' in item[0]:
+                Coso_Tuff.curve(item[1], item[2])
             elif 'M' in item[0]:
                 Motore(item[1], item[2])
             else:
