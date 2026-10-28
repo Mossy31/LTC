@@ -17,6 +17,7 @@ SogliaRimozionePunti = 10
 SogliaTrascinamento = 3
 Raggio = 5
 PassoSnap = 45
+RaggioMassimoCurva = 5000
 ListaPunti = []
 StoriaAnnulla = []
 ImmagineTappeto = "Mappa.png"
@@ -115,23 +116,37 @@ def Vicino(Gradi, Riferimento):
         Gradi += 360
     return Gradi
 
-def Arco(A, B, Direzione):
-    # Arco che parte da A tangente alla direzione del robot e finisce in B
-    # Ritorna (Raggio, Angolo, Centro) oppure None se B e' in linea retta
-    Dx = math.sin(math.radians(Direzione))
-    Dy = -math.cos(math.radians(Direzione))
-    Vx = B["X"] - A["X"]
-    Vy = B["Y"] - A["Y"]
-    Phi = math.atan2(Dx * Vy - Dy * Vx, Dx * Vx + Dy * Vy)
-    if abs(math.sin(Phi)) < 0.01:
+def Arco(A, M, B):
+    # Arco di cerchio che parte da A, passa per M e finisce in B
+    # Ritorna (Raggio, Angolo, Centro, Direzione iniziale) oppure None se i punti sono in linea
+    D = 2 * (A["X"] * (M["Y"] - B["Y"]) + M["X"] * (B["Y"] - A["Y"]) + B["X"] * (A["Y"] - M["Y"]))
+    if abs(D) < 1e-6:
         return None
-    RaggioArco = math.hypot(Vx, Vy) / (2 * abs(math.sin(Phi)))
-    Segno = 1 if Phi > 0 else -1
-    Centro = (A["X"] - Dy * RaggioArco * Segno, A["Y"] + Dx * RaggioArco * Segno)
-    return RaggioArco, math.degrees(2 * Phi), Centro
+    QA = A["X"]**2 + A["Y"]**2
+    QM = M["X"]**2 + M["Y"]**2
+    QB = B["X"]**2 + B["Y"]**2
+    Cx = (QA * (M["Y"] - B["Y"]) + QM * (B["Y"] - A["Y"]) + QB * (A["Y"] - M["Y"])) / D
+    Cy = (QA * (B["X"] - M["X"]) + QM * (A["X"] - B["X"]) + QB * (M["X"] - A["X"])) / D
+    Rx = A["X"] - Cx
+    Ry = A["Y"] - Cy
+    RaggioArco = math.hypot(Rx, Ry)
+    if RaggioArco > RaggioMassimoCurva:
+        return None
+
+    Orario = (M["X"] - A["X"]) * (B["Y"] - M["Y"]) - (M["Y"] - A["Y"]) * (B["X"] - M["X"]) > 0
+    AngoloA = math.atan2(Ry, Rx)
+    AngoloB = math.atan2(B["Y"] - Cy, B["X"] - Cx)
+    if Orario:
+        Angolo = (AngoloB - AngoloA) % (2 * math.pi)
+        Vx, Vy = -Ry, Rx
+    else:
+        Angolo = -((AngoloA - AngoloB) % (2 * math.pi))
+        Vx, Vy = Ry, -Rx
+    Tangente = math.degrees(math.atan2(Vx, -Vy))
+    return RaggioArco, math.degrees(Angolo), (Cx, Cy), Tangente
 
 def PuntiArco(Da, DatiArco):
-    _, Angolo, Centro = DatiArco
+    _, Angolo, Centro, _ = DatiArco
     Rx = Da["X"] - Centro[0]
     Ry = Da["Y"] - Centro[1]
     Passi = max(2, int(abs(Angolo) / 5))
@@ -143,21 +158,29 @@ def PuntiArco(Da, DatiArco):
         Coordinate += [InPixel(X), InPixel(Y)]
     return Coordinate
 
+def PassaggioPredefinito(A, B):
+    # A meta' strada, spostato di lato di un quarto della lunghezza
+    return {"X": (A["X"] + B["X"]) / 2 + (B["Y"] - A["Y"]) / 4, "Y": (A["Y"] + B["Y"]) / 2 - (B["X"] - A["X"]) / 4}
+
 def Segmenti():
     # Percorre la lista tenendo traccia della direzione del robot
     Direzione = 0
     Risultato = []
     for Precedente, Punto in zip(ListaPunti, ListaPunti[1:]):
         Prima = Direzione
-        DatiArco = Arco(Precedente, Punto, Direzione) if Punto["Tipo"] == CURVA else None
+        DatiArco = None
+        if Punto["Tipo"] == CURVA and "Passaggio" in Punto:
+            DatiArco = Arco(Precedente, Punto["Passaggio"], Punto)
         if DatiArco:
-            Direzione += DatiArco[1]
+            Inizio = Vicino(DatiArco[3], Direzione)
+            Direzione = Inizio + DatiArco[1]
         else:
             Gradi = Angle(Precedente, Punto)
             if Punto["Tipo"] == INDIETRO:
                 Gradi += 180
             Direzione = Vicino(Gradi, Direzione)
-        Risultato.append({"Da": Precedente, "A": Punto, "Prima": Prima, "Dopo": Direzione, "Arco": DatiArco})
+            Inizio = Direzione
+        Risultato.append({"Da": Precedente, "A": Punto, "Prima": Prima, "Inizio": Inizio, "Dopo": Direzione, "Arco": DatiArco})
     return Risultato
 
 def DirezioneFinale():
@@ -172,11 +195,20 @@ def Snap(X, Y):
     Distanza = Distance(Ultimo, Arrivo)
     return Ultimo["X"] + Distanza * math.sin(Gradi), Ultimo["Y"] - Distanza * math.cos(Gradi)
 
+def Vicinissimo(Punto, X, Y):
+    return abs(InPixel(Punto["X"]) - X) <= SogliaRimozionePunti and abs(InPixel(Punto["Y"]) - Y) <= SogliaRimozionePunti
+
 def TrovaPunto(X, Y):
+    # Ritorna un punto o un punto di passaggio di una curva
     for Punto in reversed(ListaPunti):
-        if abs(InPixel(Punto["X"]) - X) <= SogliaRimozionePunti and abs(InPixel(Punto["Y"]) - Y) <= SogliaRimozionePunti:
+        if "Passaggio" in Punto and Vicinissimo(Punto["Passaggio"], X, Y):
+            return Punto["Passaggio"]
+        if Vicinissimo(Punto, X, Y):
             return Punto
     return None
+
+def Indice(Punto):
+    return next(I for I, Altro in enumerate(ListaPunti) if Altro is Punto)
 
 #--------------------------------------#
 # Annulla
@@ -187,9 +219,16 @@ def SalvaStato():
         StoriaAnnulla.pop(0)
 
 def Annulla(event=None):
+    global PassaggioInSospeso
+    PassaggioInSospeso = None
     if StoriaAnnulla:
         ListaPunti[:] = StoriaAnnulla.pop()
-        Aggiorna()
+    Aggiorna()
+
+def AnnullaCurva(event=None):
+    global PassaggioInSospeso
+    PassaggioInSospeso = None
+    Aggiorna()
 
 #--------------------------------------#
 # Mouse
@@ -197,29 +236,46 @@ def Annulla(event=None):
 Trascinato = None
 Spostato = False
 InizioTrascinamento = (0, 0)
+PassaggioInSospeso = None
 
 def PremiS(event):
-    global PuntoFisso, ModalitaCenter, Trascinato, Spostato, InizioTrascinamento
-    SalvaStato()
+    global PuntoFisso, ModalitaCenter, Trascinato, Spostato, InizioTrascinamento, PassaggioInSospeso
+    X = InMm(event.x)
+    Y = InMm(event.y)
 
     if ModalitaCenter:
-        PuntoFisso = NuovoPunto(InMm(event.x), InMm(event.y))
+        SalvaStato()
+        PuntoFisso = NuovoPunto(X, Y)
         SalvaConfig(PuntoFisso)
         ListaPunti[0] = dict(PuntoFisso)
         Center()
         Aggiorna()
         return
 
+    if PassaggioInSospeso is not None:
+        # Secondo click della curva: punto di arrivo
+        SalvaStato()
+        Punto = NuovoPunto(X, Y, CURVA)
+        Punto["Passaggio"] = PassaggioInSospeso
+        PassaggioInSospeso = None
+        ListaPunti.append(Punto)
+        Aggiorna()
+        return
+
     Trascinato = TrovaPunto(event.x, event.y)
     Spostato = False
     InizioTrascinamento = (event.x, event.y)
-    if Trascinato is None:
-        X = InMm(event.x)
-        Y = InMm(event.y)
-        Tipo = CURVA if event.state & CTRL else AVANTI
-        if event.state & SHIFT and Tipo != CURVA:
+    if Trascinato is not None:
+        SalvaStato()
+    elif event.state & CTRL:
+        # Primo click della curva: punto di passaggio
+        PassaggioInSospeso = {"X": X, "Y": Y}
+        Aggiorna()
+    else:
+        if event.state & SHIFT:
             X, Y = Snap(X, Y)
-        ListaPunti.append(NuovoPunto(X, Y, Tipo))
+        SalvaStato()
+        ListaPunti.append(NuovoPunto(X, Y))
         Aggiorna()
 
 def TrascinaS(event):
@@ -237,13 +293,15 @@ def TrascinaS(event):
 def RilasciaS(event):
     global Trascinato
     if Trascinato is not None and not Spostato:
-        # Click senza trascinare: cambia tipo al punto
-        Tipo = Trascinato["Tipo"]
+        # Click senza trascinare: cambia tipo al punto (i punti di passaggio non hanno un tipo)
+        Tipo = Trascinato.get("Tipo")
         if event.state & CTRL:
             if Tipo == CURVA:
                 Trascinato["Tipo"] = AVANTI
-            elif Tipo in (AVANTI, INDIETRO):
+                Trascinato.pop("Passaggio", None)
+            elif Tipo in (AVANTI, INDIETRO) and Indice(Trascinato) > 0:
                 Trascinato["Tipo"] = CURVA
+                Trascinato["Passaggio"] = PassaggioPredefinito(ListaPunti[Indice(Trascinato) - 1], Trascinato)
         elif Tipo == AVANTI:
             Trascinato["Tipo"] = INDIETRO
         elif Tipo == INDIETRO:
@@ -253,6 +311,8 @@ def RilasciaS(event):
 
 def ClickC(event):
     Punto = TrovaPunto(event.x, event.y)
+    if Punto is not None and "Tipo" not in Punto:
+        return
     Nuovo = Punto is None
     if Nuovo:
         Punto = NuovoPunto(InMm(event.x), InMm(event.y), MOTORE)
@@ -262,16 +322,24 @@ def ClickC(event):
     SalvaStato()
     Punto["Tipo"] = MOTORE
     Punto["Target"], Punto["Gradi"] = Valori
+    Punto.pop("Passaggio", None)
     if Nuovo:
         ListaPunti.append(Punto)
     Aggiorna()
 
 def ClickD(event):
     Punto = TrovaPunto(event.x, event.y)
-    if Punto is not None:
-        SalvaStato()
-        ListaPunti.remove(Punto)
-        Aggiorna()
+    if Punto is None:
+        return
+    SalvaStato()
+    Proprietario = next((Altro for Altro in ListaPunti if Altro.get("Passaggio") is Punto), None)
+    if Proprietario is not None:
+        # Eliminare il punto di passaggio trasforma la curva in una linea
+        Proprietario["Tipo"] = AVANTI
+        del Proprietario["Passaggio"]
+    else:
+        ListaPunti[:] = [Altro for Altro in ListaPunti if Altro is not Punto]
+    Aggiorna()
 
 def ChiediParametriMotore(Target, Gradi):
     Finestrella = tkinter.Toplevel(Finestra)
@@ -316,6 +384,11 @@ def Center():
     ModalitaCenter = not ModalitaCenter
     BottoneCenter.config(relief=tkinter.SUNKEN if ModalitaCenter else tkinter.RAISED)
 
+def DisegnaPassaggio(Punto):
+    X1 = InPixel(Punto["X"])
+    Y1 = InPixel(Punto["Y"])
+    Tela.create_oval(X1-Raggio, Y1-Raggio, X1+Raggio, Y1+Raggio, fill="white", outline="green", width=2, tags="Punti")
+
 def Aggiorna():
     Tela.delete("Punti", "Linee")
     if len(ListaPunti) < 1:
@@ -329,17 +402,21 @@ def Aggiorna():
         X1 = InPixel(Punto["X"])
         Y1 = InPixel(Punto["Y"])
         Tela.create_oval(X1-Raggio, Y1-Raggio, X1+Raggio, Y1+Raggio, fill=ColoriTipi[Punto["Tipo"]], outline="black", tags="Punti")
+        if "Passaggio" in Punto:
+            DisegnaPassaggio(Punto["Passaggio"])
+    if PassaggioInSospeso is not None:
+        DisegnaPassaggio(PassaggioInSospeso)
 
 def Esporta():
     with open("Output.txt", "w") as File:
         for Segmento in Segmenti():
             Punto = Segmento["A"]
+            if abs(Segmento["Inizio"] - Segmento["Prima"]) >= 0.5:
+                File.write(f"G {round(Segmento['Inizio'])}\n")
             if Segmento["Arco"]:
-                RaggioArco, Angolo, _ = Segmento["Arco"]
+                RaggioArco, Angolo, _, _ = Segmento["Arco"]
                 File.write(f"C {round(RaggioArco)} {round(Angolo)}\n")
             else:
-                if abs(Segmento["Dopo"] - Segmento["Prima"]) >= 0.5:
-                    File.write(f"G {round(Segmento['Dopo'])}\n")
                 Distanza = Distance(Segmento["Da"], Punto)
                 if Punto["Tipo"] == INDIETRO:
                     Distanza = -Distanza
@@ -358,12 +435,12 @@ def Apri():
     Punti = [Punto if isinstance(Punto, dict) else NuovoPunto(InMm(Punto[0]), InMm(Punto[1]), Punto[2]) for Punto in Punti]
     SalvaStato()
     ListaPunti[:] = Punti
-    Aggiorna()
+    AnnullaCurva()
 
 def Cancella():
     SalvaStato()
     ListaPunti.clear()
-    Aggiorna()
+    AnnullaCurva()
 
 def MovimentoCursore(event):
     Tela.coords(CursoreScalatoTkinterMouse, event.x, event.y)
@@ -375,18 +452,16 @@ def MovimentoCursore(event):
     Ultimo = ListaPunti[-1]
     X = InMm(event.x)
     Y = InMm(event.y)
-    Curva = event.state & CTRL
-    if event.state & SHIFT and not Curva:
+    if PassaggioInSospeso is None and event.state & SHIFT and not event.state & CTRL:
         X, Y = Snap(X, Y)
     Arrivo = {"X": X, "Y": Y}
-    Direzione = DirezioneFinale()
-    DatiArco = Arco(Ultimo, Arrivo, Direzione) if Curva else None
+    DatiArco = Arco(Ultimo, PassaggioInSospeso, Arrivo) if PassaggioInSospeso is not None else None
     if DatiArco:
         Tela.create_line(*PuntiArco(Ultimo, DatiArco), fill="gray20", dash=(4, 4), tags="Anteprima")
         Testo = f"R {round(DatiArco[0])} mm  {round(DatiArco[1])}°"
     else:
         Tela.create_line(InPixel(Ultimo["X"]), InPixel(Ultimo["Y"]), InPixel(X), InPixel(Y), fill="gray20", dash=(4, 4), tags="Anteprima")
-        Testo = f"{round(Distance(Ultimo, Arrivo))} mm  {round(Vicino(Angle(Ultimo, Arrivo), Direzione))}°"
+        Testo = f"{round(Distance(Ultimo, Arrivo))} mm  {round(Vicino(Angle(Ultimo, Arrivo), DirezioneFinale()))}°"
     Etichetta = Tela.create_text(event.x + 15, event.y - 15, text=Testo, anchor="w", font=("TkDefaultFont", 10, "bold"), tags="Anteprima")
     X1, Y1, X2, Y2 = Tela.bbox(Etichetta)
     Sfondo = Tela.create_rectangle(X1-3, Y1-2, X2+3, Y2+2, fill="white", outline="black", tags="Anteprima")
@@ -445,7 +520,7 @@ BottoneExit.grid(row=0, column=6, sticky="nsew")
 Tela = tkinter.Canvas(Finestra, width=LarghezzaImmagine_px, height=AltezzaImmagine_px)
 Tela.grid(row=1, column=0, columnspan=7)
 
-Aiuto = tkinter.Label(Finestra, text="Sinistro: punto (Shift = 0/45/90°, Ctrl = curva) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina · Rotella: ruota robot · Ctrl+Z: annulla")
+Aiuto = tkinter.Label(Finestra, text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina · Rotella: ruota robot · Ctrl+Z: annulla")
 Aiuto.grid(row=2, column=0, columnspan=7, sticky="w", padx=5, pady=3)
 
 Tela.bind("<ButtonPress-1>", PremiS)
@@ -459,6 +534,7 @@ Tela.bind("<Button-5>", MovimentoRotellinaGiu)
 Tela.bind("<MouseWheel>", MovimentoRotellina)
 Finestra.bind("<Control-z>", Annulla)
 Finestra.bind("<Control-Z>", Annulla)
+Finestra.bind("<Escape>", AnnullaCurva)
 
 TappetoGara = Image.open(ImmagineTappeto)
 TappetoGaraScalato = TappetoGara.resize((LarghezzaImmagine_px, AltezzaImmagine_px))
