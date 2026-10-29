@@ -473,15 +473,30 @@ def MovimentoCursore(event):
     Tela.tag_raise(Etichetta, Sfondo)
 
 Rotellina = 0
+UltimoScatto = 0
+PassoRotellinaMinimo = 2
+PassoRotellinaMassimo = 15
+# Sotto questo intervallo (ms) tra due scatti la rotazione accelera
+IntervalloRotellinaLento = 60
+
+def PassoRotellina(event):
+    # Piu' gli scatti sono ravvicinati, piu' gradi ruota ogni scatto
+    global UltimoScatto
+    Intervallo = event.time - UltimoScatto
+    UltimoScatto = event.time
+    if Intervallo <= 0:
+        return PassoRotellinaMassimo
+    Passo = round(PassoRotellinaMinimo * IntervalloRotellinaLento / Intervallo)
+    return max(PassoRotellinaMinimo, min(PassoRotellinaMassimo, Passo))
 
 def MovimentoRotellinaSu(event):
     global Rotellina
-    Rotellina = (Rotellina + 2) % 360
+    Rotellina = (Rotellina + PassoRotellina(event)) % 360
     ImpostaImmagine(Rotellina)
 
 def MovimentoRotellinaGiu(event):
     global Rotellina
-    Rotellina = (Rotellina - 2) % 360
+    Rotellina = (Rotellina - PassoRotellina(event)) % 360
     ImpostaImmagine(Rotellina)
 
 def MovimentoRotellina(event):
@@ -516,7 +531,7 @@ def ApplicaDimensioni(Larghezza, Altezza):
     Tela.itemconfig(Tappeto, image=TappetoGaraScalatoTkinter)
 
     DimensioniRobotPixel = (max(1, round(DimensioniRobot[0]*PPM)), max(1, round(DimensioniRobot[1]*PPM)))
-    ImmagineCursoreScalato = ImmagineCursore.resize(DimensioniRobotPixel)
+    ImmagineCursoreScalato = ImmagineCursore.resize(DimensioniRobotPixel, Image.NEAREST)
     CacheCursore.clear()
     ImpostaImmagine(Rotellina)
     Aggiorna()
