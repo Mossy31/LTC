@@ -12,7 +12,6 @@ import tkinter.messagebox
 import subprocess
 import tempfile
 import tkinter
-import shutil
 import sys
 import os
 import copy
@@ -485,12 +484,24 @@ def Esporta():
 
 ProcessoHub = None
 
+# BlueZ 5.87 va in crash se la ricerca Bluetooth e' filtrata per servizio e l'hub e' acceso:
+# si toglie il filtro, pybricksdev riconosce comunque l'hub dai dati che riceve
+AvvioPybricksdev = """
+import sys, bleak
+Originale = bleak.BleakScanner.__init__
+def SenzaFiltro(self, *args, **kwargs):
+    kwargs.pop("service_uuids", None)
+    Originale(self, *args, **kwargs)
+bleak.BleakScanner.__init__ = SenzaFiltro
+from pybricksdev.cli import main
+sys.argv[0] = "pybricksdev"
+main()
+"""
+
 def ComandoPybricksdev():
-    if shutil.which("pybricksdev"):
-        return ["pybricksdev"]
     try:
         import pybricksdev
-        return [sys.executable, "-m", "pybricksdev"]
+        return [sys.executable, "-c", AvvioPybricksdev]
     except ImportError:
         return None
 
