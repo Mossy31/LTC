@@ -506,6 +506,8 @@ def ApplicaDimensioni(Larghezza, Altezza):
         return
     DimensioniTela = (Larghezza, Altezza)
     PPM = min(Larghezza / LarghezzaImmagine_mm, Altezza / AltezzaImmagine_mm)
+    # La tela e' grande come la mappa e resta al centro dell'area
+    Tela.config(width=round(LarghezzaImmagine_mm * PPM), height=round(AltezzaImmagine_mm * PPM))
 
     TappetoGaraScalato = TappetoGara.resize((round(LarghezzaImmagine_mm * PPM), round(AltezzaImmagine_mm * PPM)))
     TappetoGaraScalatoTkinter = ImageTk.PhotoImage(TappetoGaraScalato)
@@ -552,8 +554,10 @@ BottoneCenter.grid(row=0, column=5, sticky="nsew")
 BottoneExit = tkinter.Button(Finestra, text="Exit", command=Finestra.destroy, padx=10, pady=4)
 BottoneExit.grid(row=0, column=6, sticky="nsew")
 
-Tela = tkinter.Canvas(Finestra, width=LarghezzaImmagine_px // 2, height=AltezzaImmagine_px // 2, highlightthickness=0)
-Tela.grid(row=1, column=0, columnspan=7, sticky="nsew")
+Area = tkinter.Frame(Finestra)
+Area.grid(row=1, column=0, columnspan=7, sticky="nsew")
+Tela = tkinter.Canvas(Area, width=LarghezzaImmagine_px // 2, height=AltezzaImmagine_px // 2, highlightthickness=0)
+Tela.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
 
 Aiuto = tkinter.Label(Finestra, justify=tkinter.LEFT, anchor="w", font=("TkDefaultFont", 9), text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina · Rotella: ruota robot · Ctrl+Z: annulla")
 Aiuto.grid(row=2, column=0, columnspan=7, sticky="ew", padx=5, pady=2)
@@ -571,7 +575,7 @@ Tela.bind("<MouseWheel>", MovimentoRotellina)
 Finestra.bind("<Control-z>", Annulla)
 Finestra.bind("<Control-Z>", Annulla)
 Finestra.bind("<Escape>", AnnullaCurva)
-Tela.bind("<Configure>", Ridimensiona)
+Area.bind("<Configure>", Ridimensiona)
 
 TappetoGara = Image.open(ImmagineTappeto)
 Tappeto = Tela.create_image(0, 0, anchor=tkinter.NW, tags="Tappeto")
