@@ -202,8 +202,10 @@ def Vicinissimo(Punto, X, Y):
     return abs(InPixel(Punto["X"]) - X) <= SogliaRimozionePunti and abs(InPixel(Punto["Y"]) - Y) <= SogliaRimozionePunti
 
 def TrovaPunto(X, Y):
-    # Ritorna un punto o un punto di passaggio di una curva
+    # Ritorna un punto o un punto di passaggio di una curva (il punto di partenza si cambia solo con Center)
     for Punto in reversed(ListaPunti):
+        if Punto is ListaPunti[0]:
+            continue
         if "Passaggio" in Punto and Vicinissimo(Punto["Passaggio"], X, Y):
             return Punto["Passaggio"]
         if Vicinissimo(Punto, X, Y):
