@@ -8,7 +8,13 @@
 from PIL import ImageTk
 from PIL import Image
 import screeninfo
+import tkinter.messagebox
+import subprocess
+import tempfile
 import tkinter
+import shutil
+import sys
+import os
 import copy
 import math
 import json
@@ -24,6 +30,9 @@ ImmagineTappeto = "Mappa.png"
 IndirizzoImmagineCursore = "Cursore.png"
 IndirizzoConfig = "Config.json"
 IndirizzoPunti = "Punti.txt"
+IndirizzoProgrammaHub = "Pybricks/Esegui.py"
+# Nome Bluetooth dell'hub, None = il primo hub Pybricks trovato
+NomeHub = None
 ModalitaCenter = False
 
 # Tipi di punto
@@ -32,6 +41,9 @@ INDIETRO = 1
 MOTORE = 2
 CURVA = 3
 ColoriTipi = {AVANTI: "red", INDIETRO: "yellow", MOTORE: "blue", CURVA: "green"}
+
+# Direzione del robot alla partenza (gradi in senso orario dall'alto della mappa)
+Orientamenti = [("Su (0°)", 0), ("Destra (+90°)", 90), ("Giu' / indietro (180°)", 180), ("Sinistra (-90°)", -90)]
 
 # Tasti premuti insieme al click (event.state)
 SHIFT = 0x0001
@@ -93,11 +105,17 @@ def CaricaConfig():
     if isinstance(Punto, list):
         # Vecchio formato in pixel
         return NuovoPunto(Punto[0] / PPMVecchiFile, Punto[1] / PPMVecchiFile)
-    return NuovoPunto(Punto["X"], Punto["Y"])
+    Nuovo = NuovoPunto(Punto["X"], Punto["Y"])
+    Nuovo["Orientamento"] = Punto.get("Orientamento", 0)
+    return Nuovo
 
 def SalvaConfig(Punto):
     with open(IndirizzoConfig, "w") as File:
-        json.dump({"PuntoFisso": {"X": round(Punto["X"], 1), "Y": round(Punto["Y"], 1)}}, File, indent=4)
+        json.dump({"PuntoFisso": {"X": round(Punto["X"], 1), "Y": round(Punto["Y"], 1), "Orientamento": Punto.get("Orientamento", 0)}}, File, indent=4)
+
+def Orientamento():
+    # Sta sul punto di partenza, cosi' viene salvato e annullato insieme al percorso
+    return ListaPunti[0].get("Orientamento", 0) if ListaPunti else PuntoFisso.get("Orientamento", 0)
 
 PuntoFisso = CaricaConfig()
 ListaPunti.append(dict(PuntoFisso))
@@ -166,8 +184,8 @@ def PassaggioPredefinito(A, B):
     return {"X": (A["X"] + B["X"]) / 2 + (B["Y"] - A["Y"]) / 4, "Y": (A["Y"] + B["Y"]) / 2 - (B["X"] - A["X"]) / 4}
 
 def Segmenti():
-    # Percorre la lista tenendo traccia della direzione del robot
-    Direzione = 0
+    # Percorre la lista tenendo traccia della direzione del robot sulla mappa
+    Direzione = Orientamento()
     Risultato = []
     for Precedente, Punto in zip(ListaPunti, ListaPunti[1:]):
         Prima = Direzione
@@ -188,7 +206,7 @@ def Segmenti():
 
 def DirezioneFinale():
     Lista = Segmenti()
-    return Lista[-1]["Dopo"] if Lista else 0
+    return Lista[-1]["Dopo"] if Lista else Orientamento()
 
 def Snap(X, Y):
     # Blocca la linea a multipli di PassoSnap gradi rispetto all'ultimo punto
@@ -251,8 +269,9 @@ def PremiS(event):
     if ModalitaCenter:
         SalvaStato()
         PuntoFisso = NuovoPunto(X, Y)
-        SalvaConfig(PuntoFisso)
+        PuntoFisso["Orientamento"] = Orientamento()
         ListaPunti[0] = dict(PuntoFisso)
+        SalvaConfig(PuntoFisso)
         Center()
         Aggiorna()
         return
@@ -335,6 +354,8 @@ def ClickC(event):
 def ClickD(event):
     Punto = TrovaPunto(event.x, event.y)
     if Punto is None:
+        if ListaPunti and Vicinissimo(ListaPunti[0], event.x, event.y):
+            MenuOrientamento(event)
         return
     SalvaStato()
     Proprietario = next((Altro for Altro in ListaPunti if Altro.get("Passaggio") is Punto), None)
@@ -344,6 +365,26 @@ def ClickD(event):
         del Proprietario["Passaggio"]
     else:
         ListaPunti[:] = [Altro for Altro in ListaPunti if Altro is not Punto]
+    Aggiorna()
+
+def MenuOrientamento(event):
+    Menu = tkinter.Menu(Finestra, tearoff=0)
+    Scelta = tkinter.IntVar(Menu, value=Orientamento())
+    for Testo, Gradi in Orientamenti:
+        Menu.add_radiobutton(label=Testo, variable=Scelta, value=Gradi, command=lambda Gradi=Gradi: ImpostaOrientamento(Gradi))
+    Menu.tk_popup(event.x_root, event.y_root)
+
+def ImpostaOrientamento(Gradi):
+    global Rotellina
+    if Gradi == Orientamento():
+        return
+    SalvaStato()
+    ListaPunti[0]["Orientamento"] = Gradi
+    PuntoFisso["Orientamento"] = Gradi
+    SalvaConfig(PuntoFisso)
+    # Il cursore parte girato come il robot
+    Rotellina = -Gradi % 360
+    ImpostaImmagine(Rotellina)
     Aggiorna()
 
 def ChiediParametriMotore(Target, Gradi):
@@ -403,6 +444,10 @@ def Aggiorna():
             Tela.create_line(*PuntiArco(Segmento["Da"], Segmento["Arco"]), fill="black", tags="Linee")
         else:
             Tela.create_line(InPixel(Segmento["Da"]["X"]), InPixel(Segmento["Da"]["Y"]), InPixel(Segmento["A"]["X"]), InPixel(Segmento["A"]["Y"]), fill="black", tags="Linee")
+    # Freccia che mostra come parte il robot
+    Partenza = ListaPunti[0]
+    Gradi = math.radians(Orientamento())
+    Tela.create_line(InPixel(Partenza["X"]), InPixel(Partenza["Y"]), InPixel(Partenza["X"]) + 25 * math.sin(Gradi), InPixel(Partenza["Y"]) - 25 * math.cos(Gradi), arrow=tkinter.LAST, width=2, fill="black", tags="Linee")
     for Punto in ListaPunti:
         X1 = InPixel(Punto["X"])
         Y1 = InPixel(Punto["Y"])
@@ -412,22 +457,81 @@ def Aggiorna():
     if PassaggioInSospeso is not None:
         DisegnaPassaggio(PassaggioInSospeso)
 
+def Istruzioni():
+    Righe = []
+    for Segmento in Segmenti():
+        Punto = Segmento["A"]
+        if abs(Segmento["Inizio"] - Segmento["Prima"]) >= 0.5:
+            # Il robot azzera l'angolo alla partenza: gli angoli sono relativi all'orientamento iniziale
+            Righe.append(f"G {round(Segmento['Inizio'] - Orientamento())}")
+        if Segmento["Arco"]:
+            RaggioArco, Angolo, _, _ = Segmento["Arco"]
+            Righe.append(f"C {round(RaggioArco)} {round(Angolo)}")
+        else:
+            Distanza = Distance(Segmento["Da"], Punto)
+            if Punto["Tipo"] == INDIETRO:
+                Distanza = -Distanza
+            Righe.append(f"A {round(Distanza)}")
+        if Punto["Tipo"] == MOTORE:
+            Righe.append(f"M {Punto['Target']} {Punto['Gradi']}")
+    return "".join(Riga + "\n" for Riga in Righe)
+
 def Esporta():
     with open("Output.txt", "w") as File:
-        for Segmento in Segmenti():
-            Punto = Segmento["A"]
-            if abs(Segmento["Inizio"] - Segmento["Prima"]) >= 0.5:
-                File.write(f"G {round(Segmento['Inizio'])}\n")
-            if Segmento["Arco"]:
-                RaggioArco, Angolo, _, _ = Segmento["Arco"]
-                File.write(f"C {round(RaggioArco)} {round(Angolo)}\n")
-            else:
-                Distanza = Distance(Segmento["Da"], Punto)
-                if Punto["Tipo"] == INDIETRO:
-                    Distanza = -Distanza
-                File.write(f"A {round(Distanza)}\n")
-            if Punto["Tipo"] == MOTORE:
-                File.write(f"M {Punto['Target']} {Punto['Gradi']}\n")
+        File.write(Istruzioni())
+
+#--------------------------------------#
+# Run: carica il percorso sull'hub via Bluetooth con pybricksdev e lo avvia
+
+ProcessoHub = None
+
+def ComandoPybricksdev():
+    if shutil.which("pybricksdev"):
+        return ["pybricksdev"]
+    try:
+        import pybricksdev
+        return [sys.executable, "-m", "pybricksdev"]
+    except ImportError:
+        return None
+
+def Run():
+    global ProcessoHub, FileProgramma, FileLog
+    if ProcessoHub is not None:
+        return
+    Comando = ComandoPybricksdev()
+    if Comando is None:
+        tkinter.messagebox.showerror("Run", "pybricksdev non e' installato.\nInstallalo con: pip install pybricksdev")
+        return
+    Esporta()
+    with open(IndirizzoProgrammaHub, "r") as File:
+        Programma = File.read()
+    Programma = Programma.replace('PERCORSO = ""', f'PERCORSO = """\n{Istruzioni()}"""', 1)
+    FileProgramma = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False)
+    FileProgramma.write(Programma)
+    FileProgramma.close()
+    FileLog = tempfile.TemporaryFile("w+")
+    Comando += ["run", "ble"]
+    if NomeHub:
+        Comando += ["--name", NomeHub]
+    ProcessoHub = subprocess.Popen(Comando + [FileProgramma.name], stdout=FileLog, stderr=subprocess.STDOUT)
+    BottoneRun.config(text="Run...", state=tkinter.DISABLED)
+    Finestra.after(200, ControllaRun)
+
+def ControllaRun():
+    # Il processo resta aperto finche' il programma gira sull'hub
+    global ProcessoHub
+    Codice = ProcessoHub.poll()
+    if Codice is None:
+        Finestra.after(200, ControllaRun)
+        return
+    ProcessoHub = None
+    BottoneRun.config(text="Run", state=tkinter.NORMAL)
+    os.remove(FileProgramma.name)
+    FileLog.seek(0)
+    Uscita = FileLog.read().strip()
+    FileLog.close()
+    if Codice != 0:
+        tkinter.messagebox.showerror("Run", f"Errore durante il caricamento sull'hub:\n\n{Uscita[-1500:]}")
 
 def Salva():
     with open(IndirizzoPunti, "w") as File:
@@ -466,13 +570,13 @@ def MovimentoCursore(event):
         Testo = f"R {round(DatiArco[0])} mm  {round(DatiArco[1])}°"
     else:
         Tela.create_line(InPixel(Ultimo["X"]), InPixel(Ultimo["Y"]), InPixel(X), InPixel(Y), fill="gray20", dash=(4, 4), tags="Anteprima")
-        Testo = f"{round(Distance(Ultimo, Arrivo))} mm  {round(Vicino(Angle(Ultimo, Arrivo), DirezioneFinale()))}°"
+        Testo = f"{round(Distance(Ultimo, Arrivo))} mm  {round(Vicino(Angle(Ultimo, Arrivo), DirezioneFinale()) - Orientamento())}°"
     Etichetta = Tela.create_text(event.x + 15, event.y - 15, text=Testo, anchor="w", font=("TkDefaultFont", 10, "bold"), tags="Anteprima")
     X1, Y1, X2, Y2 = Tela.bbox(Etichetta)
     Sfondo = Tela.create_rectangle(X1-3, Y1-2, X2+3, Y2+2, fill="white", outline="black", tags="Anteprima")
     Tela.tag_raise(Etichetta, Sfondo)
 
-Rotellina = 0
+Rotellina = -Orientamento() % 360
 UltimoScatto = 0
 PassoRotellinaMinimo = 2
 PassoRotellinaMassimo = 15
@@ -545,7 +649,7 @@ def ImpostaImmagine(Gradi):
 Finestra = tkinter.Tk()
 Finestra.title("Line-To-Code")
 
-for Colonna in range(7):
+for Colonna in range(8):
     Finestra.columnconfigure(Colonna, weight=1)
 
 Finestra.rowconfigure(1, weight=1)
@@ -568,16 +672,18 @@ BottoneAnnulla = tkinter.Button(Finestra, text="Annulla", command=Annulla, padx=
 BottoneAnnulla.grid(row=0, column=4, sticky="nsew")
 BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=10, pady=4)
 BottoneCenter.grid(row=0, column=5, sticky="nsew")
+BottoneRun = tkinter.Button(Finestra, text="Run", command=Run, padx=10, pady=4)
+BottoneRun.grid(row=0, column=6, sticky="nsew")
 BottoneExit = tkinter.Button(Finestra, text="Exit", command=Finestra.destroy, padx=10, pady=4)
-BottoneExit.grid(row=0, column=6, sticky="nsew")
+BottoneExit.grid(row=0, column=7, sticky="nsew")
 
 Area = tkinter.Frame(Finestra)
-Area.grid(row=1, column=0, columnspan=7, sticky="nsew")
+Area.grid(row=1, column=0, columnspan=8, sticky="nsew")
 Tela = tkinter.Canvas(Area, width=LarghezzaImmagine_px // 2, height=AltezzaImmagine_px // 2, highlightthickness=0)
 Tela.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
 
-Aiuto = tkinter.Label(Finestra, justify=tkinter.LEFT, anchor="w", font=("TkDefaultFont", 9), text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina · Rotella: ruota robot · Ctrl+Z: annulla")
-Aiuto.grid(row=2, column=0, columnspan=7, sticky="ew", padx=5, pady=2)
+Aiuto = tkinter.Label(Finestra, justify=tkinter.LEFT, anchor="w", font=("TkDefaultFont", 9), text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina (sul punto di partenza: orientamento) · Rotella: ruota robot · Ctrl+Z: annulla")
+Aiuto.grid(row=2, column=0, columnspan=8, sticky="ew", padx=5, pady=2)
 Aiuto.bind("<Configure>", lambda event: Aiuto.config(wraplength=event.width - 10))
 
 Tela.bind("<ButtonPress-1>", PremiS)
