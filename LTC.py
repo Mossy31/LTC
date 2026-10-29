@@ -530,7 +530,9 @@ def ControllaRun():
     FileLog.seek(0)
     Uscita = FileLog.read().strip()
     FileLog.close()
-    if Codice != 0:
+    if Codice != 0 and "TimeoutError" in Uscita:
+        tkinter.messagebox.showerror("Run", "Hub non trovato.\n\nDeve essere acceso, con il firmware Pybricks, e non collegato a Pybricks Code o ad altri computer.")
+    elif Codice != 0:
         tkinter.messagebox.showerror("Run", f"Errore durante il caricamento sull'hub:\n\n{Uscita[-1500:]}")
 
 def Salva():
