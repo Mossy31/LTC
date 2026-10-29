@@ -10,9 +10,11 @@ from PIL import Image
 import screeninfo
 import tkinter.messagebox
 import subprocess
+import threading
 import tempfile
+import asyncio
+import time
 import tkinter
-import sys
 import os
 import copy
 import math
@@ -480,38 +482,136 @@ def Esporta():
         File.write(Istruzioni())
 
 #--------------------------------------#
-# Run: carica il percorso sull'hub via Bluetooth con pybricksdev e lo avvia
+# Run: carica il percorso sull'hub via Bluetooth con pybricksdev e lo avvia.
+# La connessione resta aperta in un thread a parte, cosi' si legge anche la batteria.
 
-ProcessoHub = None
+try:
+    import bleak
+    from pybricksdev.connections import ConnectionState
+    from pybricksdev.connections.pybricks import PybricksHubBLE
+    from pybricksdev.ble.pybricks import PYBRICKS_SERVICE_UUID
+except ImportError:
+    bleak = None
 
-# BlueZ 5.87 va in crash se la ricerca Bluetooth e' filtrata per servizio e l'hub e' acceso:
-# si toglie il filtro, pybricksdev riconosce comunque l'hub dai dati che riceve
-AvvioPybricksdev = """
-import sys, bleak
-Originale = bleak.BleakScanner.__init__
-def SenzaFiltro(self, *args, **kwargs):
-    kwargs.pop("service_uuids", None)
-    Originale(self, *args, **kwargs)
-bleak.BleakScanner.__init__ = SenzaFiltro
-from pybricksdev.cli import main
-sys.argv[0] = "pybricksdev"
-main()
+Hub = None
+Batteria = None
+CicloHub = None
+LavoroHub = None
+BloccoHub = None
+
+# Soglie del firmware Pybricks per le batterie LEGO ricaricabili (lib/pbio/sys/battery.c), in mV:
+# piena 8190, sotto 7200 non e' piu' OK, 6800 avviso batteria bassa, 6000 l'hub si spegne.
+# 7,3 V e' la tensione nominale (media), non quella a batteria carica.
+BatteriaPiena = 8190
+BatteriaOk = 7200
+BatteriaBassa = 6800
+BatteriaVuota = 6000
+IntervalloBatteria = 60
+
+ProgrammaBatteria = """from pybricks.hubs import PrimeHub
+print("BATTERIA", PrimeHub().battery.voltage())
 """
 
-def ComandoPybricksdev():
+def EHub(Dispositivo, Dati):
+    return PYBRICKS_SERVICE_UUID in Dati.service_uuids and (NomeHub is None or Dispositivo.name == NomeHub)
+
+def ScollegaHubRimasti():
+    # Un hub rimasto collegato (es. a Pybricks Code chiuso male) non si fa piu' trovare
     try:
-        import pybricksdev
-        return [sys.executable, "-c", AvvioPybricksdev]
-    except ImportError:
-        return None
+        Collegati = subprocess.run(["bluetoothctl", "devices", "Connected"], capture_output=True, text=True, timeout=5).stdout
+        for Riga in Collegati.splitlines():
+            Parti = Riga.split()
+            if len(Parti) < 2 or Parti[0] != "Device":
+                continue
+            Info = subprocess.run(["bluetoothctl", "info", Parti[1]], capture_output=True, text=True, timeout=5).stdout
+            if PYBRICKS_SERVICE_UUID in Info.lower():
+                subprocess.run(["bluetoothctl", "disconnect", Parti[1]], capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+async def EseguiSulHub(Indirizzo):
+    # Ritorna quello che il programma ha stampato sull'hub
+    global Batteria
+    async with BloccoHub:
+        await Hub.run(Indirizzo, wait=True, print_output=False)
+        Uscita = [Riga.decode(errors="replace") for Riga in Hub.output]
+    for Riga in Uscita:
+        Parti = Riga.split()
+        if len(Parti) == 2 and Parti[0] == "BATTERIA":
+            Batteria = int(Parti[1])
+    return "\n".join(Uscita)
+
+async def GestisciHub():
+    # BlueZ 5.87 va in crash se la ricerca Bluetooth e' filtrata per servizio (lo fa anche
+    # Pybricks Code): si cerca senza filtro e si riconosce l'hub dai dati che riceve
+    global Hub, Batteria, BloccoHub
+    BloccoHub = asyncio.Lock()
+    with open(FileBatteria, "w") as File:
+        File.write(ProgrammaBatteria)
+    UltimaLettura = 0
+    while True:
+        try:
+            if Hub is None:
+                ScollegaHubRimasti()
+                Dispositivo = await bleak.BleakScanner.find_device_by_filter(EHub, timeout=5)
+                if Dispositivo is None:
+                    continue
+                NuovoHub = PybricksHubBLE(Dispositivo)
+                await NuovoHub.connect()
+                Hub = NuovoHub
+                UltimaLettura = 0
+            if Hub.connection_state_observable.value != ConnectionState.CONNECTED:
+                Hub = None
+                Batteria = None
+                continue
+            if time.monotonic() - UltimaLettura > IntervalloBatteria and not BloccoHub.locked():
+                UltimaLettura = time.monotonic()
+                await EseguiSulHub(FileBatteria)
+        except Exception:
+            # bluetoothd riavviato, hub spento a meta' connessione...: si riprova
+            if Hub is not None and Hub.connection_state_observable.value != ConnectionState.CONNECTED:
+                Hub = None
+                Batteria = None
+            await asyncio.sleep(3)
+        await asyncio.sleep(1)
+
+def AvviaHub():
+    global CicloHub, FileBatteria
+    if bleak is None:
+        return
+    FileBatteria = os.path.join(tempfile.gettempdir(), "LTC_Batteria.py")
+    CicloHub = asyncio.new_event_loop()
+    threading.Thread(target=CicloHub.run_until_complete, args=(GestisciHub(),), daemon=True).start()
+
+def ChiudiHub():
+    # Senza disconnettere, BlueZ lascia l'hub collegato anche dopo la chiusura
+    if Hub is not None:
+        try:
+            asyncio.run_coroutine_threadsafe(Hub.disconnect(), CicloHub).result(timeout=5)
+        except Exception:
+            pass
+    Finestra.destroy()
+
+def AggiornaBatteria():
+    if Hub is None or Batteria is None:
+        EtichettaBatteria.place_forget()
+    else:
+        # Percentuale lineare tra spegnimento e piena: e' una stima, la tensione e' il dato vero
+        Percentuale = max(0, min(100, round((Batteria - BatteriaVuota) * 100 / (BatteriaPiena - BatteriaVuota))))
+        Colore = "green" if Batteria >= BatteriaOk else "orange" if Batteria > BatteriaBassa else "red"
+        EtichettaBatteria.config(text=f"Batteria {Percentuale}% ({Batteria / 1000:.2f} V)", fg=Colore)
+        EtichettaBatteria.place(relx=1, rely=0, x=-5, y=5, anchor="ne")
+    Finestra.after(500, AggiornaBatteria)
 
 def Run():
-    global ProcessoHub, FileProgramma, FileLog
-    if ProcessoHub is not None:
+    global LavoroHub, FileProgramma
+    if LavoroHub is not None:
         return
-    Comando = ComandoPybricksdev()
-    if Comando is None:
+    if CicloHub is None:
         tkinter.messagebox.showerror("Run", "pybricksdev non e' installato.\nInstallalo con: pip install pybricksdev")
+        return
+    if Hub is None:
+        tkinter.messagebox.showerror("Run", "Hub non connesso.\n\nDeve essere acceso, con il firmware Pybricks, e non collegato a Pybricks Code o ad altri computer. LTC si collega da solo appena lo trova.")
         return
     Esporta()
     with open(IndirizzoProgrammaHub, "r") as File:
@@ -520,31 +620,24 @@ def Run():
     FileProgramma = tempfile.NamedTemporaryFile("w", suffix=".py", delete=False)
     FileProgramma.write(Programma)
     FileProgramma.close()
-    FileLog = tempfile.TemporaryFile("w+")
-    Comando += ["run", "ble"]
-    if NomeHub:
-        Comando += ["--name", NomeHub]
-    ProcessoHub = subprocess.Popen(Comando + [FileProgramma.name], stdout=FileLog, stderr=subprocess.STDOUT)
+    LavoroHub = asyncio.run_coroutine_threadsafe(EseguiSulHub(FileProgramma.name), CicloHub)
     BottoneRun.config(text="Run...", state=tkinter.DISABLED)
     Finestra.after(200, ControllaRun)
 
 def ControllaRun():
-    # Il processo resta aperto finche' il programma gira sull'hub
-    global ProcessoHub
-    Codice = ProcessoHub.poll()
-    if Codice is None:
+    # Il lavoro finisce quando il programma si ferma sull'hub
+    global LavoroHub
+    if not LavoroHub.done():
         Finestra.after(200, ControllaRun)
         return
-    ProcessoHub = None
+    Lavoro = LavoroHub
+    LavoroHub = None
     BottoneRun.config(text="Run", state=tkinter.NORMAL)
     os.remove(FileProgramma.name)
-    FileLog.seek(0)
-    Uscita = FileLog.read().strip()
-    FileLog.close()
-    if Codice != 0 and "TimeoutError" in Uscita:
-        tkinter.messagebox.showerror("Run", "Hub non trovato.\n\nDeve essere acceso, con il firmware Pybricks, e non collegato a Pybricks Code o ad altri computer.")
-    elif Codice != 0:
-        tkinter.messagebox.showerror("Run", f"Errore durante il caricamento sull'hub:\n\n{Uscita[-1500:]}")
+    if Lavoro.exception() is not None:
+        tkinter.messagebox.showerror("Run", f"Errore durante il caricamento sull'hub:\n\n{Lavoro.exception()!r}")
+    elif "Traceback" in Lavoro.result():
+        tkinter.messagebox.showerror("Run", f"Errore nel programma sull'hub:\n\n{Lavoro.result()[-1500:]}")
 
 def Salva():
     with open(IndirizzoPunti, "w") as File:
@@ -687,13 +780,14 @@ BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=10,
 BottoneCenter.grid(row=0, column=5, sticky="nsew")
 BottoneRun = tkinter.Button(Finestra, text="Run", command=Run, padx=10, pady=4)
 BottoneRun.grid(row=0, column=6, sticky="nsew")
-BottoneExit = tkinter.Button(Finestra, text="Exit", command=Finestra.destroy, padx=10, pady=4)
+BottoneExit = tkinter.Button(Finestra, text="Exit", command=ChiudiHub, padx=10, pady=4)
 BottoneExit.grid(row=0, column=7, sticky="nsew")
 
 Area = tkinter.Frame(Finestra)
 Area.grid(row=1, column=0, columnspan=8, sticky="nsew")
 Tela = tkinter.Canvas(Area, width=LarghezzaImmagine_px // 2, height=AltezzaImmagine_px // 2, highlightthickness=0)
 Tela.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
+EtichettaBatteria = tkinter.Label(Area, font=("TkDefaultFont", 11, "bold"))
 
 Aiuto = tkinter.Label(Finestra, justify=tkinter.LEFT, anchor="w", font=("TkDefaultFont", 9), text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina (sul punto di partenza: orientamento) · Rotella: ruota robot · Ctrl+Z: annulla")
 Aiuto.grid(row=2, column=0, columnspan=8, sticky="ew", padx=5, pady=2)
@@ -719,4 +813,7 @@ Tappeto = Tela.create_image(0, 0, anchor=tkinter.NW, tags="Tappeto")
 ImmagineCursore = Image.open(IndirizzoImmagineCursore).convert("RGBA")
 CursoreScalatoTkinterMouse = Tela.create_image(LarghezzaImmagine_px/2, AltezzaImmagine_px/2, anchor="center", tags="Mouse")
 ApplicaDimensioni(LarghezzaImmagine_px, AltezzaImmagine_px)
+Finestra.protocol("WM_DELETE_WINDOW", ChiudiHub)
+AvviaHub()
+AggiornaBatteria()
 Finestra.mainloop()

@@ -51,3 +51,6 @@ for Riga in PERCORSO.split("\n"):
         Tuff.light.on(Color.RED)
         wait(1000)
         break
+
+# LTC.py legge questa riga per mostrare la batteria
+print("BATTERIA", Tuff.battery.voltage())
