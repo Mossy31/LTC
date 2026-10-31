@@ -1,7 +1,7 @@
 {
-    "PuntoFisso": [
-        134,
-        1881,
-        0
-    ]
+    "PuntoFisso": {
+        "X": 264.6,
+        "Y": 1069.2,
+        "Orientamento": 90
+    }
 }

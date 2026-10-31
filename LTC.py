@@ -196,11 +196,14 @@ def Segmenti():
         if DatiArco:
             Inizio = Vicino(DatiArco[3], Direzione)
             Direzione = Inizio + DatiArco[1]
-        else:
+        elif Distance(Precedente, Punto) >= 0.5:
             Gradi = Angle(Precedente, Punto)
             if Punto["Tipo"] == INDIETRO:
                 Gradi += 180
             Direzione = Vicino(Gradi, Direzione)
+            Inizio = Direzione
+        else:
+            # Punto sopra il precedente (es. motore subito dopo una curva): il robot non gira
             Inizio = Direzione
         Risultato.append({"Da": Precedente, "A": Punto, "Prima": Prima, "Inizio": Inizio, "Dopo": Direzione, "Arco": DatiArco})
     return Risultato
@@ -457,6 +460,7 @@ def Aggiorna():
             DisegnaPassaggio(Punto["Passaggio"])
     if PassaggioInSospeso is not None:
         DisegnaPassaggio(PassaggioInSospeso)
+    AggiornaTesto()
 
 def Istruzioni():
     Righe = []
@@ -467,12 +471,15 @@ def Istruzioni():
             Righe.append(f"G {round(Segmento['Inizio'] - Orientamento())}")
         if Segmento["Arco"]:
             RaggioArco, Angolo, _, _ = Segmento["Arco"]
-            Righe.append(f"C {round(RaggioArco)} {round(Angolo)}")
+            # Pybricks arc(): raggio positivo = curva a destra, negativo = a sinistra;
+            # un angolo negativo vorrebbe dire retromarcia, quindi resta sempre positivo
+            Righe.append(f"C {round(RaggioArco) if Angolo > 0 else -round(RaggioArco)} {round(abs(Angolo))}")
         else:
             Distanza = Distance(Segmento["Da"], Punto)
             if Punto["Tipo"] == INDIETRO:
                 Distanza = -Distanza
-            Righe.append(f"A {round(Distanza)}")
+            if round(Distanza) != 0:
+                Righe.append(f"A {round(Distanza)}")
         if Punto["Tipo"] == MOTORE:
             Righe.append(f"M {Punto['Target']} {Punto['Gradi']}")
     return "".join(Riga + "\n" for Riga in Righe)
@@ -480,6 +487,125 @@ def Istruzioni():
 def Esporta():
     with open("Output.txt", "w") as File:
         File.write(Istruzioni())
+    AggiornaTesto(True)
+
+#--------------------------------------#
+# Editor a destra: le stesse istruzioni di Esporta (mm e gradi), modificabili.
+# Cambiando un valore il percorso sulla mappa viene ricostruito da capo.
+
+# Lettera: (numero di valori, descrizione per gli errori)
+FormatoIstruzioni = {"A": (1, "A mm"), "G": (1, "G gradi"), "C": (2, "C raggio gradi"), "M": (2, "M target gradi")}
+TestoMostrato = ""
+ModificaDaTesto = False
+StatoSalvatoTesto = False
+
+def AggiornaTesto(Forza=False):
+    # Riscrive l'editor col percorso della mappa, ma non mentre lo si sta modificando
+    global TestoMostrato
+    if ModificaDaTesto and not Forza:
+        return
+    Nuovo = Istruzioni()
+    if Nuovo == Editor.get("1.0", "end-1c"):
+        TestoMostrato = Nuovo
+        return
+    Cursore = Editor.index(tkinter.INSERT)
+    Vista = Editor.yview()[0]
+    Editor.delete("1.0", tkinter.END)
+    Editor.insert("1.0", Nuovo)
+    Editor.mark_set(tkinter.INSERT, Cursore)
+    Editor.yview_moveto(Vista)
+    Editor.tag_remove("Errore", "1.0", tkinter.END)
+    StatoEditor.config(text="", fg="black")
+    TestoMostrato = Nuovo
+
+def LeggiIstruzioni(Testo):
+    # Ritorna (lista di (lettera, valori), None) oppure (None, (numero riga, errore))
+    Righe = []
+    for Numero, Riga in enumerate(Testo.split("\n"), 1):
+        Parti = Riga.split()
+        if not Parti:
+            continue
+        Lettera = Parti[0].upper()
+        if Lettera not in FormatoIstruzioni:
+            return None, (Numero, f"'{Parti[0]}' non e' A, G, C o M")
+        Quanti, Formato = FormatoIstruzioni[Lettera]
+        try:
+            Valori = [int(Valore) for Valore in Parti[1:]]
+        except ValueError:
+            return None, (Numero, f"servono numeri interi: {Formato}")
+        if len(Valori) != Quanti:
+            return None, (Numero, f"formato: {Formato}")
+        if Lettera == "C" and not (0 < abs(Valori[0]) <= RaggioMassimoCurva and 0 < Valori[1] < 360):
+            return None, (Numero, f"raggio da 1 a {RaggioMassimoCurva} (negativo = sinistra), gradi da 1 a 359")
+        Righe.append((Lettera, Valori))
+    return Righe, None
+
+def PuntiDaIstruzioni(Righe):
+    # Rifa' il percorso del robot dal punto di partenza (mm, Y verso il basso, gradi orari dall'alto)
+    Partenza = ListaPunti[0]
+    X, Y = Partenza["X"], Partenza["Y"]
+    Direzione = Orientamento()
+    Punti = [Partenza]
+    for Lettera, Valori in Righe:
+        if Lettera == "G":
+            Direzione = Valori[0] + Orientamento()
+        elif Lettera == "A":
+            Radianti = math.radians(Direzione)
+            X += Valori[0] * math.sin(Radianti)
+            Y -= Valori[0] * math.cos(Radianti)
+            Punti.append(NuovoPunto(X, Y, INDIETRO if Valori[0] < 0 else AVANTI))
+        elif Lettera == "C":
+            # Il centro sta a destra del robot se il raggio e' positivo, a sinistra se negativo
+            Radianti = math.radians(Direzione)
+            Cx = X + Valori[0] * math.cos(Radianti)
+            Cy = Y + Valori[0] * math.sin(Radianti)
+            Angolo = Valori[1] if Valori[0] > 0 else -Valori[1]
+            def Ruota(Gradi):
+                T = math.radians(Gradi)
+                return {"X": Cx + (X - Cx) * math.cos(T) - (Y - Cy) * math.sin(T), "Y": Cy + (X - Cx) * math.sin(T) + (Y - Cy) * math.cos(T)}
+            Punto = NuovoPunto(**Ruota(Angolo), Tipo=CURVA)
+            Punto["Passaggio"] = Ruota(Angolo / 2)
+            X, Y = Punto["X"], Punto["Y"]
+            Direzione += Angolo
+            Punti.append(Punto)
+        elif Lettera == "M":
+            # Un motore subito dopo un tratto in avanti sta su quel punto, altrimenti su un punto nuovo dove si trova il robot
+            Ultimo = Punti[-1]
+            if Ultimo["Tipo"] != AVANTI or Ultimo is Partenza:
+                Ultimo = NuovoPunto(X, Y)
+                Punti.append(Ultimo)
+            Ultimo["Tipo"] = MOTORE
+            Ultimo["Target"], Ultimo["Gradi"] = Valori
+    return Punti
+
+def ModificaTesto(event=None):
+    global ModificaDaTesto, StatoSalvatoTesto, TestoMostrato
+    Testo = Editor.get("1.0", "end-1c")
+    if Testo == TestoMostrato:
+        return
+    TestoMostrato = Testo
+    Editor.tag_remove("Errore", "1.0", tkinter.END)
+    Righe, Errore = LeggiIstruzioni(Testo)
+    if Errore:
+        Editor.tag_add("Errore", f"{Errore[0]}.0", f"{Errore[0]}.end")
+        StatoEditor.config(text=f"Riga {Errore[0]}: {Errore[1]}", fg="red")
+        return
+    StatoEditor.config(text="", fg="black")
+    # Un solo passo di Annulla per tutta la modifica nell'editor
+    if not StatoSalvatoTesto:
+        SalvaStato()
+        StatoSalvatoTesto = True
+    ListaPunti[1:] = PuntiDaIstruzioni(Righe)[1:]
+    ModificaDaTesto = True
+    Aggiorna()
+    ModificaDaTesto = False
+
+def EsciDalTesto(event=None):
+    # Uscendo dall'editor si vede il percorso come lo eseguira' il robot
+    global StatoSalvatoTesto
+    StatoSalvatoTesto = False
+    if not Editor.tag_ranges("Errore"):
+        AggiornaTesto(True)
 
 #--------------------------------------#
 # Run: carica il percorso sull'hub via Bluetooth con pybricksdev e lo avvia.
@@ -600,7 +726,7 @@ def AggiornaBatteria():
         Percentuale = max(0, min(100, round((Batteria - BatteriaVuota) * 100 / (BatteriaPiena - BatteriaVuota))))
         Colore = "green" if Batteria >= BatteriaOk else "orange" if Batteria > BatteriaBassa else "red"
         EtichettaBatteria.config(text=f"Batteria {Percentuale}% ({Batteria / 1000:.2f} V)", fg=Colore)
-        EtichettaBatteria.place(relx=1, rely=0, x=-5, y=5, anchor="ne")
+        EtichettaBatteria.place(relx=1, rely=0, x=-10, y=10, anchor="ne")
     Finestra.after(500, AggiornaBatteria)
 
 def Run():
@@ -673,7 +799,7 @@ def MovimentoCursore(event):
     DatiArco = Arco(Ultimo, PassaggioInSospeso, Arrivo) if PassaggioInSospeso is not None else None
     if DatiArco:
         Tela.create_line(*PuntiArco(Ultimo, DatiArco), fill="gray20", dash=(4, 4), tags="Anteprima")
-        Testo = f"R {round(DatiArco[0])} mm  {round(DatiArco[1])}°"
+        Testo = f"R {round(DatiArco[0]) if DatiArco[1] > 0 else -round(DatiArco[0])} mm  {round(abs(DatiArco[1]))}°"
     else:
         Tela.create_line(InPixel(Ultimo["X"]), InPixel(Ultimo["Y"]), InPixel(X), InPixel(Y), fill="gray20", dash=(4, 4), tags="Anteprima")
         Testo = f"{round(Distance(Ultimo, Arrivo))} mm  {round(Vicino(Angle(Ultimo, Arrivo), DirezioneFinale()) - Orientamento())}°"
@@ -766,32 +892,42 @@ try:
 except tkinter.TclError:
     Finestra.state("zoomed")
 
-BottoneEsporta = tkinter.Button(Finestra, text="Esporta", command=Esporta, padx=10, pady=4)
-BottoneEsporta.grid(row=0, column=0, sticky="nsew")
-BottoneSalva = tkinter.Button(Finestra, text="Salva", command=Salva, padx=10, pady=4)
-BottoneSalva.grid(row=0, column=1, sticky="nsew")
-BottoneApri = tkinter.Button(Finestra, text="Apri", command=Apri, padx=10, pady=4)
-BottoneApri.grid(row=0, column=2, sticky="nsew")
-BottoneCancella = tkinter.Button(Finestra, text="Cancella", command=Cancella, padx=10, pady=4)
-BottoneCancella.grid(row=0, column=3, sticky="nsew")
-BottoneAnnulla = tkinter.Button(Finestra, text="Annulla", command=Annulla, padx=10, pady=4)
-BottoneAnnulla.grid(row=0, column=4, sticky="nsew")
-BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=10, pady=4)
-BottoneCenter.grid(row=0, column=5, sticky="nsew")
-BottoneRun = tkinter.Button(Finestra, text="Run", command=Run, padx=10, pady=4)
-BottoneRun.grid(row=0, column=6, sticky="nsew")
-BottoneExit = tkinter.Button(Finestra, text="Exit", command=ChiudiHub, padx=10, pady=4)
-BottoneExit.grid(row=0, column=7, sticky="nsew")
+BottoneEsporta = tkinter.Button(Finestra, text="Esporta", command=Esporta, padx=16, pady=8)
+BottoneEsporta.grid(row=0, column=0, sticky="nsew", padx=(10, 4), pady=(10, 6))
+BottoneSalva = tkinter.Button(Finestra, text="Salva", command=Salva, padx=16, pady=8)
+BottoneSalva.grid(row=0, column=1, sticky="nsew", padx=4, pady=(10, 6))
+BottoneApri = tkinter.Button(Finestra, text="Apri", command=Apri, padx=16, pady=8)
+BottoneApri.grid(row=0, column=2, sticky="nsew", padx=4, pady=(10, 6))
+BottoneCancella = tkinter.Button(Finestra, text="Cancella", command=Cancella, padx=16, pady=8)
+BottoneCancella.grid(row=0, column=3, sticky="nsew", padx=4, pady=(10, 6))
+BottoneAnnulla = tkinter.Button(Finestra, text="Annulla", command=Annulla, padx=16, pady=8)
+BottoneAnnulla.grid(row=0, column=4, sticky="nsew", padx=4, pady=(10, 6))
+BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=16, pady=8)
+BottoneCenter.grid(row=0, column=5, sticky="nsew", padx=4, pady=(10, 6))
+BottoneRun = tkinter.Button(Finestra, text="Run", command=Run, padx=16, pady=8)
+BottoneRun.grid(row=0, column=6, sticky="nsew", padx=4, pady=(10, 6))
+BottoneExit = tkinter.Button(Finestra, text="Exit", command=ChiudiHub, padx=16, pady=8)
+BottoneExit.grid(row=0, column=7, sticky="nsew", padx=4, pady=(10, 6))
 
 Area = tkinter.Frame(Finestra)
-Area.grid(row=1, column=0, columnspan=8, sticky="nsew")
+Area.grid(row=1, column=0, columnspan=8, sticky="nsew", padx=10, pady=(4, 10))
 Tela = tkinter.Canvas(Area, width=LarghezzaImmagine_px // 2, height=AltezzaImmagine_px // 2, highlightthickness=0)
 Tela.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
 EtichettaBatteria = tkinter.Label(Area, font=("TkDefaultFont", 11, "bold"))
 
-Aiuto = tkinter.Label(Finestra, justify=tkinter.LEFT, anchor="w", font=("TkDefaultFont", 9), text="Sinistro: punto (Shift = 0/45/90°) · Ctrl+click: passaggio curva, poi click: arrivo (Esc annulla) · Trascina: sposta · Click su punto: avanti/indietro (Ctrl: curva) · Centrale: motore · Destro: elimina (sul punto di partenza: orientamento) · Rotella: ruota robot · Ctrl+Z: annulla")
-Aiuto.grid(row=2, column=0, columnspan=8, sticky="ew", padx=5, pady=2)
-Aiuto.bind("<Configure>", lambda event: Aiuto.config(wraplength=event.width - 10))
+PannelloEditor = tkinter.Frame(Finestra)
+PannelloEditor.grid(row=0, column=8, rowspan=2, sticky="nsew", padx=(6, 10), pady=10)
+PannelloEditor.rowconfigure(0, weight=1)
+Editor = tkinter.Text(PannelloEditor, width=22, font=("TkFixedFont", 12), undo=False, wrap=tkinter.NONE, padx=8, pady=6)
+Editor.grid(row=0, column=0, sticky="nsew")
+BarraEditor = tkinter.Scrollbar(PannelloEditor, command=Editor.yview)
+BarraEditor.grid(row=0, column=1, sticky="ns")
+Editor.config(yscrollcommand=BarraEditor.set)
+Editor.tag_config("Errore", background="#ffc0c0")
+StatoEditor = tkinter.Label(PannelloEditor, justify=tkinter.LEFT, anchor="w", wraplength=200)
+StatoEditor.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+Editor.bind("<KeyRelease>", ModificaTesto)
+Editor.bind("<FocusOut>", EsciDalTesto)
 
 Tela.bind("<ButtonPress-1>", PremiS)
 Tela.bind("<B1-Motion>", TrascinaS)
