@@ -5,3 +5,7 @@ Output.txt
 .directory
 .gitignore
 Backup/
+
+build/
+dist/
+__pycache__/

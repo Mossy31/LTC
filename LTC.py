@@ -22,6 +22,26 @@ import os
 import copy
 import math
 import json
+import shutil
+import sys
+
+# Nell'eseguibile (PyInstaller) immagini e programma dell'hub stanno nella cartella del pacchetto,
+# mentre Config.json, Punti.txt, Output.txt e Backup/ stanno accanto all'eseguibile
+if getattr(sys, "frozen", False):
+    CartellaRisorse = sys._MEIPASS
+    os.chdir(os.path.dirname(sys.executable))
+    if not os.path.exists("Config.json"):
+        shutil.copy(os.path.join(CartellaRisorse, "Config.json"), "Config.json")
+else:
+    CartellaRisorse = "."
+
+if sys.platform == "win32":
+    # Senza questo Windows ingrandisce la finestra sfocandola
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except (AttributeError, OSError):
+        pass
 
 SogliaRimozionePunti = 10
 SogliaTrascinamento = 3
@@ -30,11 +50,11 @@ PassoSnap = 45
 RaggioMassimoCurva = 5000
 ListaPunti = []
 StoriaAnnulla = []
-ImmagineTappeto = "Mappa.png"
-IndirizzoImmagineCursore = "Cursore.png"
+ImmagineTappeto = os.path.join(CartellaRisorse, "Mappa.png")
+IndirizzoImmagineCursore = os.path.join(CartellaRisorse, "Cursore.png")
 IndirizzoConfig = "Config.json"
 IndirizzoPunti = "Punti.txt"
-IndirizzoProgrammaHub = "Pybricks/Esegui.py"
+IndirizzoProgrammaHub = os.path.join(CartellaRisorse, "Pybricks", "Esegui.py")
 CartellaBackup = "Backup"
 # Nome Bluetooth dell'hub, None = il primo hub Pybricks trovato
 NomeHub = None
@@ -66,8 +86,9 @@ Schermo = screeninfo.get_monitors()[0]
 
 AltezzaSchermo_px = Schermo.height
 LarghezzaSchermo_px = Schermo.width
-AltezzaSchermo_mm = Schermo.height_mm
-LarghezzaSchermo_mm = Schermo.width_mm
+# Alcuni schermi (spesso su Windows) non dicono quanto sono grandi: si stimano 96 pixel per pollice
+AltezzaSchermo_mm = Schermo.height_mm or Schermo.height * 25.4 / 96
+LarghezzaSchermo_mm = Schermo.width_mm or Schermo.width * 25.4 / 96
 
 Diangonale_mm = math.sqrt(LarghezzaSchermo_mm**2 + AltezzaSchermo_mm**2)
 Diagonale_px = math.sqrt(LarghezzaSchermo_px**2 + AltezzaSchermo_px**2)
@@ -652,6 +673,9 @@ def EHub(Dispositivo, Dati):
 
 def ScollegaHubRimasti():
     # Un hub rimasto collegato (es. a Pybricks Code chiuso male) non si fa piu' trovare
+    # bluetoothctl esiste solo su Linux
+    if not sys.platform.startswith("linux"):
+        return
     try:
         Collegati = subprocess.run(["bluetoothctl", "devices", "Connected"], capture_output=True, text=True, timeout=5).stdout
         for Riga in Collegati.splitlines():

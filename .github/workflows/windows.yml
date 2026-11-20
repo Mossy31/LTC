@@ -1,0 +1,26 @@
+# Crea LTC.exe per Windows: scaricalo da Actions -> l'ultima esecuzione -> Artifacts -> LTC-Windows
+name: Eseguibile Windows
+
+on:
+  push:
+    branches: [Windows-Vibecoded]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Librerie
+        run: python -m pip install -r requirements.txt pyinstaller
+      - name: Prova Bluetooth e compilatore dell'hub
+        run: python -c "import bleak, pybricksdev.connections.pybricks; from pybricksdev.compile import compile_file; import asyncio; print(len(asyncio.run(compile_file('Pybricks', 'Esegui.py', 6))), 'byte')"
+      - name: PyInstaller
+        run: python -m PyInstaller --noconfirm Windows/LTC.spec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LTC-Windows
+          path: dist/LTC.exe
