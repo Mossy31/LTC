@@ -9,6 +9,9 @@ from PIL import ImageTk
 from PIL import Image
 import screeninfo
 import tkinter.messagebox
+import tkinter.filedialog
+import datetime
+import zipfile
 import subprocess
 import threading
 import tempfile
@@ -32,6 +35,7 @@ IndirizzoImmagineCursore = "Cursore.png"
 IndirizzoConfig = "Config.json"
 IndirizzoPunti = "Punti.txt"
 IndirizzoProgrammaHub = "Pybricks/Esegui.py"
+CartellaBackup = "Backup"
 # Nome Bluetooth dell'hub, None = il primo hub Pybricks trovato
 NomeHub = None
 ModalitaCenter = False
@@ -409,9 +413,12 @@ def ChiediParametriMotore(Target, Gradi):
 
     def Conferma(event=None):
         try:
-            Risultato.extend([int(CampoTarget.get()), int(CampoGradi.get())])
+            Valori = [int(CampoTarget.get()), int(CampoGradi.get())]
         except ValueError:
             return
+        if not 1 <= Valori[0] <= 4:
+            return
+        Risultato.extend(Valori)
         Finestrella.destroy()
 
     tkinter.Button(Finestrella, text="OK", command=Conferma).grid(row=2, column=0, columnspan=2, pady=5)
@@ -537,6 +544,8 @@ def LeggiIstruzioni(Testo):
             return None, (Numero, f"formato: {Formato}")
         if Lettera == "C" and not (0 < abs(Valori[0]) <= RaggioMassimoCurva and 0 < Valori[1] < 360):
             return None, (Numero, f"raggio da 1 a {RaggioMassimoCurva} (negativo = sinistra), gradi da 1 a 359")
+        if Lettera == "M" and not 1 <= Valori[0] <= 4:
+            return None, (Numero, "target da 1 a 4: M target gradi")
         Righe.append((Lettera, Valori))
     return Righe, None
 
@@ -778,6 +787,23 @@ def Apri():
     ListaPunti[:] = Punti
     AnnullaCurva()
 
+def Backup():
+    # ZIP col percorso attuale (anche se non salvato); il nome propone data e ora
+    os.makedirs(CartellaBackup, exist_ok=True)
+    Adesso = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    Indirizzo = tkinter.filedialog.asksaveasfilename(
+        parent=Finestra,
+        title="Backup del percorso",
+        initialdir=CartellaBackup,
+        initialfile=f"Backup_{Adesso}.zip",
+        defaultextension=".zip",
+        filetypes=[("Archivio ZIP", "*.zip")],
+    )
+    if not Indirizzo:
+        return
+    with zipfile.ZipFile(Indirizzo, "w", zipfile.ZIP_DEFLATED) as Archivio:
+        Archivio.writestr(os.path.basename(IndirizzoPunti), json.dumps(ListaPunti, indent=4))
+
 def Cancella():
     SalvaStato()
     ListaPunti.clear()
@@ -881,7 +907,7 @@ def ImpostaImmagine(Gradi):
 Finestra = tkinter.Tk()
 Finestra.title("Line-To-Code")
 
-for Colonna in range(8):
+for Colonna in range(9):
     Finestra.columnconfigure(Colonna, weight=1)
 
 Finestra.rowconfigure(1, weight=1)
@@ -898,25 +924,27 @@ BottoneSalva = tkinter.Button(Finestra, text="Salva", command=Salva, padx=16, pa
 BottoneSalva.grid(row=0, column=1, sticky="nsew", padx=4, pady=(10, 6))
 BottoneApri = tkinter.Button(Finestra, text="Apri", command=Apri, padx=16, pady=8)
 BottoneApri.grid(row=0, column=2, sticky="nsew", padx=4, pady=(10, 6))
+BottoneBackup = tkinter.Button(Finestra, text="Backup", command=Backup, padx=16, pady=8)
+BottoneBackup.grid(row=0, column=3, sticky="nsew", padx=4, pady=(10, 6))
 BottoneCancella = tkinter.Button(Finestra, text="Cancella", command=Cancella, padx=16, pady=8)
-BottoneCancella.grid(row=0, column=3, sticky="nsew", padx=4, pady=(10, 6))
+BottoneCancella.grid(row=0, column=4, sticky="nsew", padx=4, pady=(10, 6))
 BottoneAnnulla = tkinter.Button(Finestra, text="Annulla", command=Annulla, padx=16, pady=8)
-BottoneAnnulla.grid(row=0, column=4, sticky="nsew", padx=4, pady=(10, 6))
+BottoneAnnulla.grid(row=0, column=5, sticky="nsew", padx=4, pady=(10, 6))
 BottoneCenter = tkinter.Button(Finestra, text="Center", command=Center, padx=16, pady=8)
-BottoneCenter.grid(row=0, column=5, sticky="nsew", padx=4, pady=(10, 6))
+BottoneCenter.grid(row=0, column=6, sticky="nsew", padx=4, pady=(10, 6))
 BottoneRun = tkinter.Button(Finestra, text="Run", command=Run, padx=16, pady=8)
-BottoneRun.grid(row=0, column=6, sticky="nsew", padx=4, pady=(10, 6))
+BottoneRun.grid(row=0, column=7, sticky="nsew", padx=4, pady=(10, 6))
 BottoneExit = tkinter.Button(Finestra, text="Exit", command=ChiudiHub, padx=16, pady=8)
-BottoneExit.grid(row=0, column=7, sticky="nsew", padx=4, pady=(10, 6))
+BottoneExit.grid(row=0, column=8, sticky="nsew", padx=4, pady=(10, 6))
 
 Area = tkinter.Frame(Finestra)
-Area.grid(row=1, column=0, columnspan=8, sticky="nsew", padx=10, pady=(4, 10))
+Area.grid(row=1, column=0, columnspan=9, sticky="nsew", padx=10, pady=(4, 10))
 Tela = tkinter.Canvas(Area, width=LarghezzaImmagine_px // 2, height=AltezzaImmagine_px // 2, highlightthickness=0)
 Tela.place(relx=0.5, rely=0.5, anchor=tkinter.CENTER)
 EtichettaBatteria = tkinter.Label(Area, font=("TkDefaultFont", 11, "bold"))
 
 PannelloEditor = tkinter.Frame(Finestra)
-PannelloEditor.grid(row=0, column=8, rowspan=2, sticky="nsew", padx=(6, 10), pady=10)
+PannelloEditor.grid(row=0, column=9, rowspan=2, sticky="nsew", padx=(6, 10), pady=10)
 PannelloEditor.rowconfigure(0, weight=1)
 Editor = tkinter.Text(PannelloEditor, width=22, font=("TkFixedFont", 12), undo=False, wrap=tkinter.NONE, padx=8, pady=6)
 Editor.grid(row=0, column=0, sticky="nsew")

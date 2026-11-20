@@ -4,3 +4,4 @@ Output.txt
 *.pdf
 .directory
 .gitignore
+Backup/

@@ -17,15 +17,17 @@ Vortex = Motor(Port.B, Direction.CLOCKWISE)
 Coso_Tuff = DriveBase(ChilyConCarne, Vortex, 62.4, 140)
 PinoIlMotorino = Motor(Port.C, Direction.CLOCKWISE)
 Gilberto = Motor(Port.D, Direction.CLOCKWISE)
+# La gearbox parte a mano sul motore 1: quello e' lo 0
+PinoIlMotorino.reset_angle(0)
 
 def Motore(Target, Gradi):
     global Posizione
     if 1 <= Target <= 4:
-        PinoIlMotorino.run_angle(500, (Posizione - Target) * 180, Stop.BRAKE)
+        PinoIlMotorino.run_target(500, (1 - Target) * 180, Stop.HOLD)
         Tuff.display.off()
-        Tuff.display.number(abs(Posizione - Target))
+        Tuff.display.number(Target)
         Gilberto.run_angle(200, Gradi, Stop.BRAKE)
-    Posizione = Target
+        Posizione = Target
 
 Coso_Tuff.settings(straight_speed=600)
 Coso_Tuff.settings(straight_acceleration=200)
@@ -51,6 +53,11 @@ for Riga in PERCORSO.split("\n"):
         Tuff.light.on(Color.RED)
         wait(1000)
         break
+
+# Riporta la gearbox sul primo motore (ogni motore e' a 180 gradi dal successivo),
+# cosi' il programma dopo parte dalla stessa posizione
+PinoIlMotorino.run_target(500, 0, Stop.HOLD)
+Posizione = 1
 
 # LTC.py legge questa riga per mostrare la batteria
 print("BATTERIA", Tuff.battery.voltage())
