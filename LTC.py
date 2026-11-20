@@ -778,14 +778,42 @@ def Salva():
     with open(IndirizzoPunti, "w") as File:
         json.dump(ListaPunti, File, indent=4)
 
-def Apri():
-    with open(IndirizzoPunti, "r") as File:
-        Punti = json.load(File)
+def CaricaPunti(Punti):
     # Il vecchio formato era una lista di [X, Y, Tipo] in pixel
     Punti = [Punto if isinstance(Punto, dict) else NuovoPunto(Punto[0] / PPMVecchiFile, Punto[1] / PPMVecchiFile, Punto[2]) for Punto in Punti]
     SalvaStato()
     ListaPunti[:] = Punti
     AnnullaCurva()
+
+def Apri():
+    try:
+        with open(IndirizzoPunti, "r") as File:
+            Punti = json.load(File)
+    except FileNotFoundError:
+        tkinter.messagebox.showerror("Apri", f"{IndirizzoPunti} non esiste ancora: prima usa Salva.")
+        return
+    CaricaPunti(Punti)
+
+def CaricaBackup():
+    # Mette sulla mappa il percorso di un backup ZIP; Punti.txt non viene toccato finche' non si usa Salva
+    os.makedirs(CartellaBackup, exist_ok=True)
+    Indirizzo = tkinter.filedialog.askopenfilename(
+        parent=Finestra,
+        title="Carica un backup",
+        initialdir=CartellaBackup,
+        filetypes=[("Archivio ZIP", "*.zip")],
+    )
+    if not Indirizzo:
+        return
+    try:
+        with zipfile.ZipFile(Indirizzo) as Archivio:
+            Punti = json.loads(Archivio.read(os.path.basename(IndirizzoPunti)))
+        if not isinstance(Punti, list) or not Punti:
+            raise ValueError("percorso vuoto")
+    except (zipfile.BadZipFile, KeyError, ValueError, OSError) as Errore:
+        tkinter.messagebox.showerror("Carica backup", f"Backup non valido:\n{os.path.basename(Indirizzo)}\n\n{Errore}")
+        return
+    CaricaPunti(Punti)
 
 def Backup():
     # ZIP col percorso attuale (anche se non salvato); il nome propone data e ora
@@ -924,7 +952,11 @@ BottoneSalva = tkinter.Button(Finestra, text="Salva", command=Salva, padx=16, pa
 BottoneSalva.grid(row=0, column=1, sticky="nsew", padx=4, pady=(10, 6))
 BottoneApri = tkinter.Button(Finestra, text="Apri", command=Apri, padx=16, pady=8)
 BottoneApri.grid(row=0, column=2, sticky="nsew", padx=4, pady=(10, 6))
-BottoneBackup = tkinter.Button(Finestra, text="Backup", command=Backup, padx=16, pady=8)
+BottoneBackup = tkinter.Menubutton(Finestra, text="Backup ▾", relief=tkinter.RAISED, borderwidth=2, padx=16, pady=8)
+MenuBackup = tkinter.Menu(BottoneBackup, tearoff=0)
+MenuBackup.add_command(label="Crea backup...", command=Backup)
+MenuBackup.add_command(label="Carica backup...", command=CaricaBackup)
+BottoneBackup.config(menu=MenuBackup)
 BottoneBackup.grid(row=0, column=3, sticky="nsew", padx=4, pady=(10, 6))
 BottoneCancella = tkinter.Button(Finestra, text="Cancella", command=Cancella, padx=16, pady=8)
 BottoneCancella.grid(row=0, column=4, sticky="nsew", padx=4, pady=(10, 6))
